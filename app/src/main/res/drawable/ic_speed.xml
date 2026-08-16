@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 测速/闪电图标（SVG → Android VectorDrawable，Material "flash_on"） -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+  android:width="24dp" android:height="24dp"
+  android:viewportWidth="24" android:viewportHeight="24"
+  android:tint="?android:attr/colorControlNormal">
+  <path
+    android:fillColor="#FF000000"
+    android:pathData="M7,2v11h3v9l7,-12h-4l4,-8H7z" />
+</vector>

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 停用图标（SVG → Android VectorDrawable，Material "pause_circle_outline"） -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+  android:width="24dp" android:height="24dp"
+  android:viewportWidth="24" android:viewportHeight="24"
+  android:tint="?android:attr/colorControlNormal">
+  <path
+    android:fillColor="#FF000000"
+    android:pathData="M9,16h2V8H9v8zM11,2C6.48,2 2,6.48 2,12s4.48,10 10,10 10,-4.48 10,-10S17.52,2 11,2zM11,20c-4.41,0 -8,-3.59 -8,-8s3.59,-8 8,-8 8,3.59 8,8 -3.59,8 -8,8zM13,16h2V8h-2v8z" />
+</vector>

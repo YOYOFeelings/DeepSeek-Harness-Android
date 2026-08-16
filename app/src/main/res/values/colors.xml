@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <color name="ic_launcher_background">#ffffff</color>
+
+  <!-- Flat Minimalist 设计体系（浅色、扁平、无投影） -->
+  <color name="bg">#F4F5F7</color>          <!-- 页面背景 -->
+  <color name="surface">#FFFFFF</color>     <!-- 卡片/面板 -->
+  <color name="border">#E6E8EC</color>      <!-- 细分隔线 -->
+  <color name="text">#171A1F</color>        <!-- 主文本 -->
+  <color name="text_secondary">#6B7280</color>
+  <color name="text_tertiary">#9AA1AB</color>
+  <color name="accent">#2D5F9E</color>      <!-- 品牌蓝 -->
+  <color name="accent_soft">#E8EEF6</color>
+  <color name="success">#1B9E5C</color>
+  <color name="warn">#E8A33D</color>
+  <color name="error">#D94A4A</color>
+
+  <!-- 终端（深色面板，浅色字，扁平） -->
+  <color name="terminal_bg">#0F1720</color>
+  <color name="terminal_text">#E6EDF3</color>
+  <color name="terminal_dim">#8CA3B8</color>
+  <color name="terminal_accent">#5EEAD4</color>
+</resources>

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 状态胶囊：缺失/中性（浅灰底） -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+  <solid android:color="#F0F1F3" />
+  <corners android:radius="999dp" />
+</shape>

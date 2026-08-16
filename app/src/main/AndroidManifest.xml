@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+  <uses-permission android:name="android.permission.INTERNET" />
+  <!-- 外部工作区：bash 进程需要访问用户选择的目录（Android 11+ 分区存储）。 -->
+  <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
+  <application
+    android:label="@string/app_name"
+    android:icon="@mipmap/ic_launcher"
+    android:theme="@style/Theme.Dsh"
+    android:usesCleartextTraffic="true">
+
+    <service
+      android:name=".EngineService"
+      android:exported="false"
+      android:foregroundServiceType="dataSync" />
+
+    <activity
+      android:name=".MainActivity"
+      android:exported="true"
+      android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
+      android:windowSoftInputMode="adjustResize">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+      </intent-filter>
+    </activity>
+  </application>
+</manifest>

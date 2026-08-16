@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 状态胶囊：警告（浅橙底） -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+  <solid android:color="#FBF1E0" />
+  <corners android:radius="999dp" />
+</shape>
