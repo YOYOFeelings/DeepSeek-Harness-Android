@@ -9,7 +9,11 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.content.res.Configuration
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.BitmapDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -97,6 +101,8 @@ class MainActivity : ComponentActivity() {
   @Volatile private var pendingPickCallback: String? = null
 
   private lateinit var contentFrame: FrameLayout
+  /** 根布局：承载内容 + 底部/左侧导航，应用背景（颜色/图片）绘制在其上。 */
+  private lateinit var rootFrame: FrameLayout
   private lateinit var homeScreen: HomeScreen
   private lateinit var terminalScreen: TerminalScreen
   private lateinit var pluginsScreen: PluginsScreen
@@ -181,9 +187,43 @@ class MainActivity : ComponentActivity() {
     }
   }
 
+  /** 背景图片选择（相册）：复制到 filesDir/background.png（失败回退 cacheDir），保存并应用。 */
+  private val backgroundImagePicker =
+    registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+      if (uri == null) return@registerForActivityResult
+      val term = terminalScreen.terminal()
+      try {
+        var target = File(filesDir, "background.png")
+        var ok = false
+        try {
+          contentResolver.openInputStream(uri)?.use { input ->
+            target.outputStream().use { out -> input.copyTo(out) }
+          }
+          ok = target.length() > 0
+        } catch (_: Throwable) {
+          ok = false
+        }
+        if (!ok) {
+          target = File(cacheDir, "background.png")
+          contentResolver.openInputStream(uri)?.use { input ->
+            target.outputStream().use { out -> input.copyTo(out) }
+          }
+        }
+        prefs.edit()
+          .putString("settings_bg_type", "image")
+          .putString("settings_bg_value", target.absolutePath)
+          .apply()
+        applyBackground()
+        if (::settingsScreen.isInitialized) settingsScreen.refreshAppearance()
+        term.appendLine("背景图片已设置")
+      } catch (t: Throwable) {
+        term.appendLine("背景图片设置失败：" + (t.message ?: t.javaClass.simpleName))
+      }
+    }
+
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
-    val root = FrameLayout(this)
+    rootFrame = FrameLayout(this)
     contentFrame = FrameLayout(this)
     homeScreen = HomeScreen(this, object : HomeScreen.Callbacks {
       override fun onRestartEngine() = restartEngine()
@@ -221,8 +261,6 @@ class MainActivity : ComponentActivity() {
       override fun onSetKeepScreenOn(enable: Boolean) {
         contentFrame.keepScreenOn = enable
       }
-      override fun onOpenPlugins() { showTab(Tab.PLUGINS) }
-      override fun onOpenTerminal() { showTab(Tab.TERMINAL) }
       override fun onCheckUpdate() = runCheckUpdate()
       override fun onInstallEnv() = runInstallEnv()
       override fun onAppendLog(line: String) { terminalScreen.terminal().appendLine(line) }
@@ -239,6 +277,8 @@ class MainActivity : ComponentActivity() {
       override fun onViewEngineLog() = viewEngineLog()
       override fun onCheckApkUpdate() = checkApkUpdateManually()
       override fun onLanguageChanged() = rebuildUiLanguage()
+      override fun onPickBackgroundImage() { backgroundImagePicker.launch("image/*") }
+      override fun onApplyBackground() = applyBackground()
     })
     contentFrame.addView(constrained(settingsScreen), centeredParams())
     settingsScreen.visibility = View.GONE
@@ -252,16 +292,17 @@ class MainActivity : ComponentActivity() {
       ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT,
     ))
     onboardingView.visibility = View.GONE
-    root.addView(contentFrame, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+    rootFrame.addView(contentFrame, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
     bottomNavBar = buildBottomNavBar()
-    root.addView(bottomNavBar, FrameLayout.LayoutParams(
+    rootFrame.addView(bottomNavBar, FrameLayout.LayoutParams(
       ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM,
     ))
     leftNavRail = buildLeftNavRail()
-    root.addView(leftNavRail, FrameLayout.LayoutParams(
+    rootFrame.addView(leftNavRail, FrameLayout.LayoutParams(
       dp(78), ViewGroup.LayoutParams.MATCH_PARENT, Gravity.LEFT,
     ))
-    setContentView(root)
+    setContentView(rootFrame)
+    applyBackground()
     refreshNavHighlight(Tab.HOME)
     applyNavLayout()
     // 系统返回键：Web 覆盖层先关闭（并复位 webActive）；设置页内页先回退内页；否则走默认返回。
@@ -356,6 +397,46 @@ class MainActivity : ComponentActivity() {
       lp.bottomMargin = targetBottom
       contentFrame.layoutParams = lp
     }
+  }
+
+  /** 按已保存的背景设置应用应用根背景：图片 → BitmapDrawable（按屏幕尺寸缩放，失败回退默认色）；颜色 → setBackgroundColor；默认 → 背景色。 */
+  private fun applyBackground() {
+    if (!::rootFrame.isInitialized) return
+    val type = prefs.getString("settings_bg_type", "").orEmpty()
+    val value = prefs.getString("settings_bg_value", "").orEmpty()
+    try {
+      when (type) {
+        "image" -> {
+          val file = File(value)
+          if (file.exists()) {
+            val bmp = decodeScaledBackground(file.absolutePath)
+            if (bmp != null) {
+              rootFrame.background = BitmapDrawable(resources, bmp)
+              return
+            }
+          }
+          rootFrame.setBackgroundColor(resources.getColor(R.color.bg, null))
+        }
+        "color" -> rootFrame.setBackgroundColor(Color.parseColor(value))
+        else -> rootFrame.setBackgroundColor(resources.getColor(R.color.bg, null))
+      }
+    } catch (_: Throwable) {
+      runCatching { rootFrame.setBackgroundColor(resources.getColor(R.color.bg, null)) }
+    }
+  }
+
+  /** 按屏幕尺寸计算 inSampleSize 解码背景图，避免超大图 OOM；解码失败返回 null。 */
+  private fun decodeScaledBackground(path: String): Bitmap? {
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeFile(path, bounds)
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+    val maxDim = maxOf(resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels) * 2
+    var sample = 1
+    while (bounds.outWidth / (sample * 2) > maxDim || bounds.outHeight / (sample * 2) > maxDim) {
+      sample *= 2
+    }
+    val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+    return BitmapFactory.decodeFile(path, opts)
   }
 
   /** 启动流程只触发一次（APK 检查/非强制更新弹框关闭后均可能调用）。 */

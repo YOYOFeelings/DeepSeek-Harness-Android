@@ -6,7 +6,8 @@ import java.net.URL
 
 /**
  * 公告拉取：从 GitHub 仓库固定 raw 地址读取 NOTICE.md（独立公告配置，
- * 与更新说明 ANNOUNCEMENT.md 相互独立；经当前更新源镜像解析加速），
+ * 与更新说明 ANNOUNCEMENT.md 相互独立），优先官方直连、镜像回退，
+ * 拒绝 HTML 垃圾页（加速源可能返回 Cloudflare/404/挑战页 HTML），
  * 缓存最近一次内容。失败时回退缓存；无缓存则返回 null
  * （界面隐藏公告卡，不阻断任何流程）。
  */
@@ -28,13 +29,21 @@ object AnnouncementManager {
       val cached = cache(context)
       var result: String? = cached
       try {
-        // 经当前更新源镜像解析（raw.githubusercontent.com 命中 GH_HOSTS 会加前缀加速）。
-        val um = UpdateManager.forPrefs(context)
-        val resolved = um.activeMirror?.resolve(URL) ?: URL
-        val body = fetch(resolved)
+        // 1) 优先官方直连（raw.githubusercontent.com），避免镜像返回 HTML 挑战页。
+        var body = fetch(URL)
+        if (body.isBlank()) {
+          Logs.logE(context, "announcement", "官方直连无有效公告（失败或返回 HTML），回退镜像源")
+          // 2) 镜像回退（加速代理可能返回 Cloudflare/404/挑战页 HTML）。
+          val um = UpdateManager.forPrefs(context)
+          val resolved = um.activeMirror?.resolve(URL) ?: URL
+          body = fetch(resolved)
+        }
         if (body.isNotBlank()) {
+          // 仅缓存校验通过（非 HTML）的内容。
           result = body
           saveCache(context, body)
+        } else {
+          Logs.logE(context, "announcement", "官方与镜像均无有效公告，回退缓存")
         }
       } catch (t: Throwable) {
         Logs.logE(context, "announcement", "拉取公告失败，使用缓存", t)
@@ -53,7 +62,8 @@ object AnnouncementManager {
       .apply()
   }
 
-  /** 手动跟随重定向的 GET（镜像源可能跳转），返回响应文本；失败/非 200 返回空串。 */
+  /** 手动跟随重定向的 GET（镜像源可能跳转），返回响应文本；
+   *  失败/非 200/返回内容为 HTML 垃圾页时返回空串。 */
   private fun fetch(url: String): String {
     var current = url
     var conn: HttpURLConnection? = null
@@ -75,7 +85,8 @@ object AnnouncementManager {
           redirects++
         } else {
           if (code != 200) return ""
-          return conn.inputStream.bufferedReader().use { it.readText() }
+          val text = conn.inputStream.bufferedReader().use { it.readText() }
+          return if (looksLikeHtml(text)) "" else text
         }
       }
     } catch (_: Throwable) {
@@ -83,5 +94,17 @@ object AnnouncementManager {
     } finally {
       conn?.disconnect()
     }
+  }
+
+  /** 判断响应体是否为 HTML/垃圾页（加速源可能返回 Cloudflare/404/挑战页）。 */
+  private fun looksLikeHtml(body: String): Boolean {
+    val t = body.trim()
+    val lower = t.lowercase()
+    return lower.startsWith("<!doctype") ||
+      lower.startsWith("<html") ||
+      lower.startsWith("<!--") ||
+      lower.startsWith("<?xml") ||
+      (t.startsWith("<") &&
+        (lower.contains("<head") || lower.contains("<body") || lower.contains("<title") || lower.contains("</html>")))
   }
 }

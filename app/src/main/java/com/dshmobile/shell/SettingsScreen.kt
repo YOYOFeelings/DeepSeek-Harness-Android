@@ -3,6 +3,7 @@ package com.dshmobile.shell
 import android.content.Context
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
+import android.graphics.Color
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffColorFilter
 import android.graphics.Typeface
@@ -18,13 +19,12 @@ import android.widget.ScrollView
 import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
-import java.io.File
 
-/** 设置页（底部导航 Tab 4）：列表条目 → 点击跳转独立子页。
+/** 设置页（底部导航 Tab 4）：两列卡片网格 → 点击跳转独立子页。
  *   - 无展开/收起交互；条目点击后进入对应子页（顶部返回栏 + 可滚动内容），系统返回键逐级返回；
  *   - 本页不包含任何日志列表 / TerminalView——所有日志统一在「主页」终端展示，
  *     设置内产生日志的动作（引擎检查等）通过 Callbacks.onAppendLog 转发到主页终端；
- *   - 关于子页为 KernelSU 风格：居中图标/名称/版本 + 信息行 + 占位链接行（QQ群/打赏支持等）；
+ *   - 顶层条目：通用 / 更新 / 存储 / 权限 / 外观（背景设置），两列网格布局；
  *   - 开关状态持久化到 dsh_shell prefs（settings_ 前缀）。纯原生 View 实现，无新依赖。 */
 class SettingsScreen(context: Context, private val callbacks: Callbacks) : LinearLayout(context) {
 
@@ -34,8 +34,6 @@ class SettingsScreen(context: Context, private val callbacks: Callbacks) : Linea
     fun onOpenDirectory()
     fun onExportDebugLogs()
     fun onSetKeepScreenOn(enable: Boolean)
-    fun onOpenPlugins()
-    fun onOpenTerminal()          // 切换到主页终端
     fun onCheckUpdate()           // 运行更新管线（日志输出到主页终端）
     fun onCheckApkUpdate()        // 检查应用自身（APK）更新
     fun onInstallEnv()            // 运行环境安装（日志输出到主页终端）
@@ -46,6 +44,8 @@ class SettingsScreen(context: Context, private val callbacks: Callbacks) : Linea
     fun onClearCache()            // 清理应用缓存（cacheDir + WebView 缓存）
     fun onViewEngineLog()         // 查看引擎日志（输出到主页终端）
     fun onLanguageChanged()       // 语言切换后重建页面
+    fun onPickBackgroundImage()   // 从相册选择一张图片作为应用背景
+    fun onApplyBackground()       // 按已保存的背景设置重新应用根背景
   }
 
   private val prefs = context.getSharedPreferences("dsh_shell", Context.MODE_PRIVATE)
@@ -72,21 +72,38 @@ class SettingsScreen(context: Context, private val callbacks: Callbacks) : Linea
 
   init {
     orientation = LinearLayout.VERTICAL
-    setBackgroundColor(resources.getColor(R.color.bg, null))
+    background = resources.getDrawable(R.drawable.bg_screen_translucent, null)
     setPadding(dp(16), dp(16), dp(16), dp(16))
 
-    // 顶层条目列表
-    listEntry(I18n.t(context, "通用", "General"), R.drawable.ic_settings) { buildGeneral(it) }
-    listEntry(I18n.t(context, "更新", "Updates"), R.drawable.ic_update) { buildUpdate(it) }
-    listEntry(I18n.t(context, "存储", "Storage"), R.drawable.ic_open) { buildStorage(it) }
-    listEntry(I18n.t(context, "权限", "Permissions"), R.drawable.ic_shield) { buildPermissions(it) }
-    listEntry(I18n.t(context, "关于", "About"), R.drawable.ic_info) { buildAbout(it) }
-    listEntry(I18n.t(context, "终端", "Terminal"), R.drawable.ic_terminal) { buildTerminal(it) }
-    listEntry(I18n.t(context, "插件", "Plugins"), R.drawable.ic_plugin) { buildPlugins(it) }
+    // 顶层条目（两列卡片网格；5 项 → 3 行，末行单卡占一格）
+    val entries = listOf(
+      ListEntry(I18n.t(context, "通用", "General"), R.drawable.ic_settings) { buildGeneral(it) },
+      ListEntry(I18n.t(context, "更新", "Updates"), R.drawable.ic_update) { buildUpdate(it) },
+      ListEntry(I18n.t(context, "存储", "Storage"), R.drawable.ic_open) { buildStorage(it) },
+      ListEntry(I18n.t(context, "权限", "Permissions"), R.drawable.ic_shield) { buildPermissions(it) },
+      ListEntry(I18n.t(context, "外观", "Appearance"), R.drawable.ic_info) { openAppearance() },
+    )
+    for (i in entries.indices step 2) {
+      val row = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) }
+      }
+      row.addView(gridCard(entries[i]), LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(8) })
+      if (i + 1 < entries.size) {
+        row.addView(gridCard(entries[i + 1]), LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
+      }
+      listContainer.addView(row)
+    }
     addView(listContainer, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
 
     addView(subContainer, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
   }
+
+  /** 顶层条目定义（标题 / 图标 / 点击跳转子页）。 */
+  private class ListEntry(val title: String, val iconRes: Int, val onClick: (LinearLayout) -> Unit)
+
+  /** 当前展示中的子页标题（用于外部触发时按需重建子页，如换背景后刷新「外观」）。 */
+  private var currentPageTitle: String? = null
 
   /** 刷新下载记录 / 更新源列表等动态子页内容。 */
   fun refresh() {
@@ -113,6 +130,7 @@ class SettingsScreen(context: Context, private val callbacks: Callbacks) : Linea
 
   /** 展示子页：清空 subContainer，加入顶部返回栏（‹ 返回 + 标题）与已构建内容，隐藏条目列表。 */
   private fun showPage(title: String, build: (LinearLayout) -> Unit) {
+    currentPageTitle = title
     subContainer.removeAllViews()
     val page = LinearLayout(context).apply {
       orientation = LinearLayout.VERTICAL
@@ -165,44 +183,44 @@ class SettingsScreen(context: Context, private val callbacks: Callbacks) : Linea
     listContainer.visibility = View.GONE
   }
 
-  /** 顶层条目：卡片行（图标 + 标题 + "›"），点击跳转子页。 */
-  private fun listEntry(title: String, iconRes: Int, onClick: (LinearLayout) -> Unit) {
-    val accent = resources.getColor(R.color.accent, null)
-    val entry = LinearLayout(context).apply {
-      orientation = LinearLayout.HORIZONTAL
-      gravity = Gravity.CENTER_VERTICAL
-      setPadding(dp(16), dp(14), dp(16), dp(14))
-      background = resources.getDrawable(R.drawable.bg_card, null)
-      isClickable = true
-      isFocusable = true
-      layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) }
-    }
-    entry.addView(
+  /** 顶层条目卡片（两列网格）：图标在上 + 标题在下，垂直居中，整卡可点击，无 "›" 箭头。
+   *  调用方负责设置网格 LayoutParams（weight=1 + 间距）。 */
+  private fun gridCard(entry: ListEntry): LinearLayout = LinearLayout(context).apply {
+    orientation = LinearLayout.VERTICAL
+    gravity = Gravity.CENTER_HORIZONTAL
+    setPadding(dp(12), dp(18), dp(12), dp(14))
+    background = resources.getDrawable(R.drawable.bg_card, null)
+    isClickable = true
+    isFocusable = true
+    addView(
       ImageView(context).apply {
-        setImageResource(iconRes)
-        colorFilter = PorterDuffColorFilter(accent, PorterDuff.Mode.SRC_IN)
-        layoutParams = LayoutParams(dp(22), dp(22)).apply { marginEnd = dp(12) }
+        setImageResource(entry.iconRes)
+        colorFilter = PorterDuffColorFilter(resources.getColor(R.color.accent, null), PorterDuff.Mode.SRC_IN)
+        layoutParams = LayoutParams(dp(26), dp(26))
       },
     )
-    entry.addView(
+    addView(
       TextView(context).apply {
-        text = title
-        textSize = 15f
+        text = entry.title
+        textSize = 14f
         typeface = Typeface.DEFAULT_BOLD
+        gravity = Gravity.CENTER_HORIZONTAL
         setTextColor(resources.getColor(R.color.text, null))
-        layoutParams = LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
+        setPadding(0, dp(8), 0, 0)
+        layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
       },
     )
-    entry.addView(
-      TextView(context).apply {
-        text = "›"
-        textSize = 18f
-        setTextColor(resources.getColor(R.color.text_tertiary, null))
-        gravity = Gravity.CENTER_VERTICAL
-      },
-    )
-    entry.setOnClickListener { showPage(title) { body -> onClick(body) } }
-    listContainer.addView(entry)
+    setOnClickListener { showPage(entry.title) { body -> entry.onClick(body) } }
+  }
+
+  /** 打开「外观」子页（换背景后重建以刷新选中状态）。 */
+  private fun openAppearance() {
+    showPage(I18n.t(context, "外观", "Appearance")) { buildAppearance(it) }
+  }
+
+  /** 若当前正停留在「外观」子页则重建它（选图/换色/恢复默认后刷新选中态）。 */
+  fun refreshAppearance() {
+    if (currentPageTitle == I18n.t(context, "外观", "Appearance")) openAppearance()
   }
 
   // ============ 子页内容 ============
@@ -320,31 +338,41 @@ class SettingsScreen(context: Context, private val callbacks: Callbacks) : Linea
       "settings_auto_check_updates", true) { /* 仅持久化 */ })
     body.addView(divider())
 
-    body.addView(
+    val updateRow = LinearLayout(context).apply {
+      orientation = LinearLayout.HORIZONTAL
+      layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(4) }
+    }
+    updateRow.addView(
       flatButton(I18n.t(context, "检查并应用更新", "Check & apply update"), accent = true) { callbacks.onCheckUpdate() },
-      LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(4) },
+      LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(6) },
     )
-    body.addView(
+    updateRow.addView(
       flatButton(I18n.t(context, "安装/升级最新 Node.js + Python", "Install/upgrade Node.js + Python"), accent = false) { callbacks.onInstallEnv() },
-      LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) },
+      LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f),
     )
+    body.addView(updateRow)
 
     body.addView(sectionLabel(I18n.t(context, "应用更新（APK）", "App update (APK)")), LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
       topMargin = dp(14)
     })
-    body.addView(
+    val apkRow = LinearLayout(context).apply {
+      orientation = LinearLayout.HORIZONTAL
+      layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) }
+    }
+    apkRow.addView(
       flatButton(I18n.t(context, "检查应用更新", "Check app update"), accent = true) { callbacks.onCheckApkUpdate() },
-      LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) },
+      LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(6) },
     )
+    apkRow.addView(
+      flatButton(I18n.t(context, "自动测速选择最快源", "Auto-select fastest source"), accent = false) { speedTestSources() },
+      LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f),
+    )
+    body.addView(apkRow)
 
     // ============ 更新源管理（从主页迁移） ============
     body.addView(sectionLabel(I18n.t(context, "更新源", "Update sources")), LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
       topMargin = dp(16)
     })
-    body.addView(
-      flatButton(I18n.t(context, "自动测速选择最快源", "Auto-select fastest source"), accent = false) { speedTestSources() },
-      LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(4) },
-    )
 
     // 更新源列表（每行圆点 + 名称 + 延迟 + 激活标记；点击切换激活源）
     mirrorList = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
@@ -582,137 +610,103 @@ class SettingsScreen(context: Context, private val callbacks: Callbacks) : Linea
     addView(value)
   }
 
-  /** 关于页（重建）：居中 Logo + 名称 + 版本 → 系统信息 → 全宽操作按钮 → 版权。 */
-  private fun buildAbout(body: LinearLayout) {
-    // 顶部：图标 + 名称 + 版本（居中）
-    val header = LinearLayout(context).apply {
+  /** 外观：更换应用背景（预设颜色 / 从相册选图 / 恢复默认），持久化并即时应用。 */
+  private fun buildAppearance(body: LinearLayout) {
+    val bgType = prefs.getString("settings_bg_type", "").orEmpty()
+    val bgValue = prefs.getString("settings_bg_value", "").orEmpty()
+
+    body.addView(sectionLabel(I18n.t(context, "预设背景", "Preset background")))
+    // 预设颜色（两列一行，点击即应用）
+    val presets = listOf(
+      "#F4F5F7", "#E8EEF6", "#F7EFE8", "#EEF7E8", "#F6E8EE", "#1F2937",
+    )
+    for (i in presets.indices step 2) {
+      val row = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) }
+      }
+      fun addSwatch(idx: Int) {
+        val hex = presets[idx]
+        val active = bgType == "color" && bgValue.equals(hex, ignoreCase = true)
+        val sw = colorSwatch(hex, active) {
+          prefs.edit()
+            .putString("settings_bg_type", "color")
+            .putString("settings_bg_value", hex)
+            .apply()
+          callbacks.onApplyBackground()
+          openAppearance()
+        }
+        row.addView(sw, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply { if (idx % 2 == 0) marginEnd = dp(8) })
+      }
+      addSwatch(i)
+      if (i + 1 < presets.size) addSwatch(i + 1)
+      body.addView(row)
+    }
+
+    // 当前背景说明
+    val desc = when {
+      bgType == "image" -> I18n.t(context, "当前：自定义图片背景", "Current: custom image background")
+      bgType == "color" && bgValue.isNotEmpty() -> I18n.t(context, "当前：预设颜色 " + bgValue, "Current: preset color " + bgValue)
+      else -> I18n.t(context, "当前：默认背景", "Current: default background")
+    }
+    body.addView(
+      TextView(context).apply {
+        text = desc
+        textSize = 11f
+        setTextColor(resources.getColor(R.color.text_secondary, null))
+      },
+      LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(4) },
+    )
+
+    body.addView(
+      flatButton(I18n.t(context, "选择图片作为背景", "Choose image as background"), accent = true) { callbacks.onPickBackgroundImage() },
+      LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) },
+    )
+    body.addView(
+      flatButton(I18n.t(context, "恢复默认", "Reset default"), accent = false) {
+        prefs.edit().remove("settings_bg_type").remove("settings_bg_value").apply()
+        callbacks.onApplyBackground()
+        openAppearance()
+      },
+      LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) },
+    )
+  }
+
+  /** 预设背景色块：圆形色块 + 下方十六进制/「当前」标注，点击应用。 */
+  private fun colorSwatch(hex: String, active: Boolean, onClick: () -> Unit): LinearLayout =
+    LinearLayout(context).apply {
       orientation = LinearLayout.VERTICAL
       gravity = Gravity.CENTER_HORIZONTAL
-      setPadding(0, dp(2), 0, dp(10))
+      setPadding(0, dp(4), 0, dp(4))
+      isClickable = true
+      isFocusable = true
+      val accent = resources.getColor(R.color.accent, null)
+      addView(
+        View(context).apply {
+          background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(Color.parseColor(hex))
+            setStroke(
+              if (active) dp(3) else dp(1),
+              if (active) accent else resources.getColor(R.color.border, null),
+            )
+          }
+          layoutParams = LayoutParams(dp(44), dp(44))
+        },
+      )
+      addView(
+        TextView(context).apply {
+          text = if (active) I18n.t(context, "当前", "Current") else hex
+          textSize = 9f
+          gravity = Gravity.CENTER_HORIZONTAL
+          setSingleLine(true)
+          setTextColor(if (active) accent else resources.getColor(R.color.text_tertiary, null))
+          setPadding(0, dp(4), 0, 0)
+          layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
+        },
+      )
+      setOnClickListener { onClick() }
     }
-    header.addView(
-      ImageView(context).apply {
-        setImageResource(R.mipmap.ic_launcher)
-        layoutParams = LayoutParams(dp(56), dp(56))
-      },
-    )
-    header.addView(
-      TextView(context).apply {
-        text = "deepseek HARNESS"
-        textSize = 17f
-        typeface = Typeface.DEFAULT_BOLD
-        setTextColor(resources.getColor(R.color.text, null))
-        gravity = Gravity.CENTER_HORIZONTAL
-        setPadding(0, dp(10), 0, 0)
-      },
-      LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT),
-    )
-    val versionText = TextView(context).apply {
-      textSize = 12f
-      setTextColor(resources.getColor(R.color.text_secondary, null))
-      gravity = Gravity.CENTER_HORIZONTAL
-      setPadding(0, dp(4), 0, 0)
-    }
-    val versionName = try {
-      context.packageManager.getPackageInfo(context.packageName, 0).versionName
-    } catch (_: Throwable) {
-      "?"
-    }
-    versionText.text = I18n.t(context, "版本 ", "Version ") + versionName
-    header.addView(versionText, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
-    body.addView(header)
-
-    body.addView(divider())
-
-    // 系统信息
-    val infoText = TextView(context).apply {
-      textSize = 12f
-      setLineSpacing(dp(3).toFloat(), 1f)
-      setTextColor(resources.getColor(R.color.text, null))
-      text = I18n.t(context, "系统信息加载中…", "Loading system info…")
-    }
-    body.addView(infoText, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) })
-    body.addView(divider(), LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) })
-
-    // 操作按钮：全宽单列纵向，避免小屏下按钮被裁剪/遮挡
-    body.addView(
-      fullWidthTile(R.drawable.ic_web, I18n.t(context, "开源地址", "Open source")) { callbacks.onOpenUrl("https://github.com/YOYOFeelings/DeepSeek-Harness-Android") },
-      LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) },
-    )
-    body.addView(
-      fullWidthTile(R.drawable.ic_info, I18n.t(context, "开源许可", "License")) { callbacks.onOpenUrl("https://github.com/YOYOFeelings/DeepSeek-Harness-Android/blob/main/LICENSE") },
-      LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) },
-    )
-    body.addView(
-      fullWidthTile(R.drawable.ic_terminal, I18n.t(context, "QQ群", "QQ group")) { showQQGroupDialog() },
-      LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) },
-    )
-    body.addView(
-      fullWidthTile(R.drawable.ic_import, I18n.t(context, "打赏支持", "Donate")) { showToast(I18n.t(context, "打赏功能暂未开放，感谢支持", "Donation is not yet available. Thank you for your support!")) },
-      LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) },
-    )
-
-    // 底部版权
-    body.addView(
-      TextView(context).apply {
-        text = "Powered by DeepSeek Harness"
-        textSize = 11f
-        gravity = Gravity.CENTER_HORIZONTAL
-        setTextColor(resources.getColor(R.color.text_tertiary, null))
-        setPadding(0, dp(14), 0, 0)
-      },
-      LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT),
-    )
-
-    // 后台探测引擎状态并回填
-    Thread {
-      try {
-        val running = EngineProbe.check().optBoolean("running", false)
-        val dshDir = File(context.filesDir, "home/.dsh")
-        val sb = StringBuilder()
-        sb.append("Android: ").append(Build.VERSION.RELEASE).append(" / SDK ").append(Build.VERSION.SDK_INT).append('\n')
-        sb.append("DSH_HOME: ").append(dshDir.absolutePath).append('\n')
-        sb.append(I18n.t(context, "引擎状态: ", "Engine: "))
-          .append(if (running) I18n.t(context, "运行中", "running") else I18n.t(context, "未运行", "stopped")).append('\n')
-        sb.append(I18n.t(context, "运行时快照: ", "Runtime snapshot: "))
-          .append(if (File(context.filesDir, "usr/bin/node").exists()) I18n.t(context, "已解压", "extracted") else I18n.t(context, "缺失", "missing"))
-        post { infoText.text = sb.toString() }
-      } catch (_: Throwable) {
-      }
-    }.start()
-  }
-
-  /** 终端：说明日志统一在主页终端 + 快捷入口。 */
-  private fun buildTerminal(body: LinearLayout) {
-    body.addView(
-      TextView(context).apply {
-        text = I18n.t(context, "所有安装/更新/运行日志统一在「主页」终端中展示。", "All logs are displayed in the Home terminal.")
-        textSize = 12f
-        setTextColor(resources.getColor(R.color.text_secondary, null))
-      },
-      LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT),
-    )
-    body.addView(
-      flatButton(I18n.t(context, "打开主页终端", "Open Home terminal"), accent = true) { callbacks.onOpenTerminal() },
-      LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) },
-    )
-  }
-
-  /** 插件：快捷入口（插件管理在「插件」页）。 */
-  private fun buildPlugins(body: LinearLayout) {
-    body.addView(
-      TextView(context).apply {
-        text = I18n.t(context, "插件的导入、停用/启用与卸载请前往「插件」页。", "Go to the Plugins page to import, enable/disable, or uninstall plugins.")
-        textSize = 12f
-        setTextColor(resources.getColor(R.color.text_secondary, null))
-      },
-      LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT),
-    )
-    body.addView(
-      flatButton(I18n.t(context, "打开插件页", "Open Plugins"), accent = true) { callbacks.onOpenPlugins() },
-      LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) },
-    )
-  }
 
   // ============ 操作逻辑 ============
 
@@ -797,43 +791,6 @@ class SettingsScreen(context: Context, private val callbacks: Callbacks) : Linea
     setTextColor(resources.getColor(R.color.text, null))
     setPadding(0, 0, 0, dp(4))
   }
-
-  /** 全宽操作按钮：图标 + 文字 + 右箭头，ghost 卡背景（与列表条目风格一致）。
-   *  调用方负责传全宽 LayoutParams。 */
-  private fun fullWidthTile(iconRes: Int, label: String, onClick: () -> Unit): LinearLayout =
-    LinearLayout(context).apply {
-      orientation = LinearLayout.HORIZONTAL
-      gravity = Gravity.CENTER_VERTICAL
-      setPadding(dp(14), dp(14), dp(14), dp(14))
-      background = resources.getDrawable(R.drawable.bg_button_ghost, null)
-      isClickable = true
-      isFocusable = true
-      addView(
-        ImageView(context).apply {
-          setImageResource(iconRes)
-          colorFilter = PorterDuffColorFilter(resources.getColor(R.color.accent, null), PorterDuff.Mode.SRC_IN)
-          layoutParams = LayoutParams(dp(22), dp(22)).apply { marginEnd = dp(12) }
-        },
-      )
-      addView(
-        TextView(context).apply {
-          text = label
-          textSize = 14f
-          typeface = Typeface.DEFAULT_BOLD
-          setTextColor(resources.getColor(R.color.text, null))
-          layoutParams = LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
-        },
-      )
-      addView(
-        TextView(context).apply {
-          text = "›"
-          textSize = 18f
-          setTextColor(resources.getColor(R.color.text_tertiary, null))
-          gravity = Gravity.CENTER_VERTICAL
-        },
-      )
-      setOnClickListener { onClick() }
-    }
 
   /** 权限卡片：图标 + 标题/说明 + 状态 + 动作按钮。 */
   private fun permCard(
@@ -966,17 +923,6 @@ class SettingsScreen(context: Context, private val callbacks: Callbacks) : Linea
       )
       setOnClickListener { onClick() }
     }
-
-  /** QQ 群弹窗：展示官方 QQ 群号。 */
-  private fun showQQGroupDialog() {
-    DialogUi.show(
-      context = context,
-      title = I18n.t(context, "加入 QQ 群", "Join QQ Group"),
-      message = I18n.t(context, "QQ 群 1：200317338\nQQ 群 2：932593560", "QQ Group 1: 200317338\nQQ Group 2: 932593560"),
-      iconRes = R.drawable.ic_info,
-      actions = listOf(DialogUi.Action(I18n.t(context, "确定", "OK"), accent = true)),
-    )
-  }
 
   private fun showToast(text: String) {
     Toast.makeText(context, text, Toast.LENGTH_SHORT).show()

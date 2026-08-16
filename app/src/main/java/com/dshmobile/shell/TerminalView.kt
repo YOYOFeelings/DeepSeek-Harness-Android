@@ -1,5 +1,7 @@
 package com.dshmobile.shell
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Color
 import android.graphics.Typeface
@@ -33,7 +35,7 @@ class TerminalView(context: Context, private val logFile: File? = null) : Scroll
     setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
     setLineSpacing(dp(2).toFloat(), 1f)
     setPadding(dp(12), dp(12), dp(12), dp(12))
-    setTextIsSelectable(false)
+    setTextIsSelectable(true)
     // 长行自动换行（下载进度/路径等）：关闭横向滚动 + 高质量断行，确保
     // 超宽行按屏幕宽度软换行而不是被裁掉（"下载没有正常换行"修复）。
     setHorizontallyScrolling(false)
@@ -159,6 +161,19 @@ class TerminalView(context: Context, private val logFile: File? = null) : Scroll
 
   /** 返回当前完整文本内容。 */
   fun getText(): String = textView.text.toString()
+
+  /**
+   * 复制当前完整终端文本到系统剪贴板。
+   * 即使文本为空也会复制（空串），是否提示由调用方通过 [success] 回调决定；
+   * 本方法不做任何 Toast，保持副作用最小。
+   */
+  fun copyAll(success: (() -> Unit)? = null) {
+    val text = getText()
+    val clipboard =
+      context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    clipboard.setPrimaryClip(ClipData.newPlainText("dsh terminal", text))
+    success?.invoke()
+  }
 
   /** dp 转 px 的私有辅助；minSdk 26 可直接读 density。 */
   private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()

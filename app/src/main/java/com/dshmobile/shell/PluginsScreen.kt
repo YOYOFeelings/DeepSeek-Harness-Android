@@ -32,7 +32,7 @@ class PluginsScreen(context: Context, private val callbacks: Callbacks) : Linear
 
   init {
     orientation = LinearLayout.VERTICAL
-    setBackgroundColor(resources.getColor(R.color.bg, null))
+    background = resources.getDrawable(R.drawable.bg_screen_translucent, null)
     setPadding(dp(16), dp(16), dp(16), dp(16))
 
     // 标题行：标题 + 导入按钮

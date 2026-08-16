@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 屏幕背景：半透明白（#D9 = 约 85% 不透明度，叠在应用根背景之上），
+     让根背景（颜色/图片）隐约透出，同时保证文字可读。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+  <solid android:color="#D9F4F5F7" />
+</shape>

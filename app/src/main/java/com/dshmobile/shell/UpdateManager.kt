@@ -27,7 +27,9 @@ class Mirror(val id: String, val name: String, val prefix: String) {
  * Runtime snapshot online update（M2）：
  *  1) 拉取 GitHub Releases 的 MANIFEST.txt（sha256  path  size 每行一个）；
  *  2) 按设备 ABI 匹配 snapshot-{arm64|x86_64}.tar.xz；
- *  3) 经所选更新源（官方直连 / 多个国内加速源，自动测速最快或用户指定 / 自定义）下载；
+ *  3) 经所选更新源（官方直连 / 25 个内置国内加速源 + 自定义）下载；
+ *     默认行为：未显式选择更新源时，自动测速并选择最快可用源；
+ *     用户显式选择某源后以用户选择为准（对 HTML/垃圾响应源自动剔除）。
  *  4) SHA256 校验 → 解压到 usr-new → 原子切换 usr → 写 .snapshot-online 标记
  *     （防止下次启动把在线更新覆盖回内嵌快照）。
  * 引擎重启由 EngineService 看门狗在下次轮询完成。
@@ -37,7 +39,7 @@ class UpdateManager(private val context: Context) {
   /** 发布清单 URL（GitHub Releases 的 latest/download/MANIFEST.txt）。 */
   var manifestUrl: String = DEFAULT_MANIFEST_URL
 
-  /** 当前激活更新源（null = 未指定；UI/引导流程按预置或自动测速赋值）。 */
+  /** 当前激活更新源（null = 未显式选择 → 更新时自动测速选最快源；UI/引导流程可显式赋值）。 */
   var activeMirror: Mirror? = null
 
   /** 用户自定义加速前缀（UI「添加更新源」写入）。 */
@@ -92,11 +94,11 @@ class UpdateManager(private val context: Context) {
   fun resolveForDownload(url: String, mirror: Mirror? = null): String =
     (mirror ?: activeMirror)?.resolve(url) ?: url
 
-  /** 实测某源拉取 manifest 的延迟；不可用返回 null。 */
+  /** 实测某源拉取 manifest 的延迟；不可用（含返回 HTML/垃圾内容）返回 null。 */
   private fun measureMirror(m: Mirror): Long? = try {
     val start = System.currentTimeMillis()
     val body = fetchText(m.resolve(manifestUrl), m, readTimeoutMs = 6000)
-    if (body.isBlank()) null else System.currentTimeMillis() - start
+    if (body.isBlank() || looksLikeHtml(body)) null else System.currentTimeMillis() - start
   } catch (_: Throwable) {
     null
   }
@@ -119,6 +121,15 @@ class UpdateManager(private val context: Context) {
     updateRunning = true
     Thread {
       try {
+        // 默认策略：未显式选择更新源时，先自动测速选最快可用源（选不上则保持 null，
+        // 由 candidateMirrors() 按内置+自定义顺序回退）。
+        if (activeMirror == null) {
+          val fastest = speedTestAll()
+          if (fastest != null) {
+            activeMirror = fastest
+            onStage("检查", "自动测速，已选择最快源 " + fastest.name)
+          }
+        }
       // 下载记录用变量（跨 try/catch 共享；仅真正发起下载后才写记录）。
       var downloadAttempted = false
       var downloadSizeLabel = ""
@@ -328,10 +339,23 @@ class UpdateManager(private val context: Context) {
     try {
       val code = conn.responseCode
       if (code != 200) throw IllegalStateException("HTTP $code")
-      return conn.inputStream.bufferedReader().use { it.readText() }
+      val body = conn.inputStream.bufferedReader().use { it.readText() }
+      // 部分源返回登录页/404 HTML 而非清单：判定为不可用，让调用方回退下一个源。
+      if (looksLikeHtml(body)) throw IllegalStateException("更新源返回非文本内容")
+      return body
     } finally {
       conn.disconnect()
     }
+  }
+
+  /** 粗判响应是否为 HTML/垃圾页面：命中则视为该源不可用（不参与测速/回退）。 */
+  private fun looksLikeHtml(body: String): Boolean {
+    val t = body.trim()
+    val low = t.lowercase()
+    return low.startsWith("<!doctype") || low.startsWith("<html") ||
+      low.startsWith("<!--") || low.startsWith("<?xml") ||
+      (t.startsWith("<") && (low.contains("<head") || low.contains("<body") ||
+        low.contains("<title") || low.contains("</html")))
   }
 
   private fun download(
@@ -395,6 +419,9 @@ class UpdateManager(private val context: Context) {
     /** 默认激活更新源 id（持久化配置缺省时使用 akaere）。 */
     const val DEFAULT_MIRROR_ID = "akaere"
 
+    /** 自动选择模式：active_mirror_id 缺失或为该值时，更新时自动测速选最快源。 */
+    const val AUTO_MIRROR_ID = "auto"
+
     const val UA = "Mozilla/5.0 (Linux; Android) dsh-mobile"
 
     /** GitHub 家族域名：命中时加加速前缀。 */
@@ -404,8 +431,9 @@ class UpdateManager(private val context: Context) {
       "gist.githubusercontent.com", "user-images.githubusercontent.com",
     )
 
-    /** 内置更新源（官方直连 + 国内加速）。akaere 作为默认源（实测更稳）；
-     *  gh-proxy 等保留为可选项；选源用自动测速，不可用的源会被跳过。 */
+    /** 内置更新源（官方直连 + 25 个国内加速源）。akaere 保留为首位（默认源）；
+     *  official 为空前缀 = 官方直连；默认策略为自动测速选最快可用源，
+     *  不可用/返回 HTML 的源会被自动跳过。 */
     val BUILTIN_MIRRORS = listOf(
       Mirror("akaere", "cdn.akaere.online", "https://cdn.akaere.online/"),
       Mirror("gh-proxy", "gh-proxy.com", "https://gh-proxy.com/"),
@@ -413,14 +441,35 @@ class UpdateManager(private val context: Context) {
       Mirror("ghproxy.net", "ghproxy.net", "https://ghproxy.net/"),
       Mirror("ghproxy.cn", "ghproxy.cn", "https://ghproxy.cn/"),
       Mirror("ghfast", "ghfast.top", "https://ghfast.top/"),
+      Mirror("noki", "gh.noki.icu", "https://gh.noki.icu/"),
+      Mirror("fastgit", "fastgit.cc", "https://fastgit.cc/"),
+      Mirror("monkeyray", "ghproxy.monkeyray.net", "https://ghproxy.monkeyray.net/"),
+      Mirror("669966", "git.669966.xyz", "https://git.669966.xyz/"),
+      Mirror("felicity", "gh.felicity.ac.cn", "https://gh.felicity.ac.cn/"),
+      Mirror("inkchills", "gh.inkchills.cn", "https://gh.inkchills.cn/"),
+      Mirror("cxkpro", "ghproxy.cxkpro.top", "https://ghproxy.cxkpro.top/"),
+      Mirror("tvv", "tvv.tw", "https://tvv.tw/"),
+      Mirror("078465", "ghm.078465.xyz", "https://ghm.078465.xyz/"),
+      Mirror("bugdey", "gh.bugdey.us.kg", "https://gh.bugdey.us.kg/"),
+      Mirror("xxooo", "gh.xxooo.cf", "https://gh.xxooo.cf/"),
+      Mirror("jasonzeng", "gh.jasonzeng.dev", "https://gh.jasonzeng.dev/"),
+      Mirror("dpik", "gh.dpik.top", "https://gh.dpik.top/"),
+      Mirror("eqrr82bzpe", "ghf.xn--eqrr82bzpe.top", "https://ghf.xn--eqrr82bzpe.top/"),
+      Mirror("927223", "gh.927223.xyz", "https://gh.927223.xyz/"),
+      Mirror("imciel", "ghproxy.imciel.com", "https://ghproxy.imciel.com/"),
+      Mirror("geekertao", "ghfile.geekertao.top", "https://ghfile.geekertao.top/"),
+      Mirror("zkitefly", "gp.zkitefly.eu.org", "https://gp.zkitefly.eu.org/"),
+      Mirror("mrhjx", "gitproxy.mrhjx.cn", "https://gitproxy.mrhjx.cn/"),
     )
 
-    /** 按持久化配置构造 UpdateManager：读取 custom_source 与 active_mirror_id（默认 akaere），
-     *  并一次性迁移旧默认 gh-proxy → akaere（幂等，显式选择过其他源的用户不受影响）。 */
+    /** 按持久化配置构造 UpdateManager：读取 custom_source 与 active_mirror_id；
+     *  active_mirror_id 缺失或为 "auto"（默认）时 activeMirror = null（更新时自动测速选最快源），
+     *  为具体 id 时按用户显式选择设置；并一次性迁移旧默认 gh-proxy → akaere
+     *  （幂等，显式选择过其他源的用户不受影响）。 */
     fun forPrefs(context: Context): UpdateManager {
       val prefs = context.getSharedPreferences("dsh_shell", Context.MODE_PRIVATE)
       val customSource = prefs.getString("custom_source", null)
-      var activeMirrorId = prefs.getString("active_mirror_id", DEFAULT_MIRROR_ID) ?: DEFAULT_MIRROR_ID
+      var activeMirrorId = prefs.getString("active_mirror_id", AUTO_MIRROR_ID) ?: AUTO_MIRROR_ID
       if (activeMirrorId == "gh-proxy" && !prefs.getBoolean("migrated_old_default", false)) {
         activeMirrorId = DEFAULT_MIRROR_ID
         prefs.edit()
@@ -430,7 +479,9 @@ class UpdateManager(private val context: Context) {
       }
       return UpdateManager(context).apply {
         customPrefix = customSource
-        activeMirror = mirrorById(activeMirrorId) ?: mirrorById(DEFAULT_MIRROR_ID)
+        // "auto"/缺失 → 未显式选择（null），更新时自动测速选最快源。
+        activeMirror = if (activeMirrorId == AUTO_MIRROR_ID) null
+        else mirrorById(activeMirrorId) ?: mirrorById(DEFAULT_MIRROR_ID)
       }
     }
   }

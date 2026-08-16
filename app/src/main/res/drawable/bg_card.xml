@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 扁平卡片：白底 + 细描边 + 圆角，无投影 -->
+<!-- 扁平卡片：半透明白（#EF = 约 94% 不透明度）+ 细描边 + 圆角，无投影。
+     半透明让根背景（颜色/图片）能隐约透出卡片，同时保证正文可读。 -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-  <solid android:color="@color/surface" />
+  <solid android:color="#EFFFFFFF" />
   <stroke android:width="1dp" android:color="@color/border" />
   <corners android:radius="14dp" />
 </shape>

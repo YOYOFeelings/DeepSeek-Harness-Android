@@ -57,7 +57,7 @@ class HomeScreen(
 
   init {
     orientation = LinearLayout.VERTICAL
-    setBackgroundColor(resources.getColor(R.color.bg, null))
+    background = resources.getDrawable(R.drawable.bg_screen_translucent, null)
     setPadding(dp(16), dp(16), dp(16), dp(16))
 
     // 页面标题
@@ -247,10 +247,10 @@ class HomeScreen(
     }
   }
 
-  /** 设置公告内容；null/空白 = 隐藏公告卡。 */
+  /** 设置公告内容；null/空白/净化后空白 = 隐藏公告卡。 */
   fun setAnnouncement(text: String?) {
     post {
-      val t = text?.trim()
+      val t = sanitizeAnnouncement(text)
       if (t.isNullOrEmpty()) {
         announcementCard.visibility = View.GONE
       } else {
@@ -258,6 +258,18 @@ class HomeScreen(
         announcementCard.visibility = View.VISIBLE
       }
     }
+  }
+
+  /** 防御性净化：剥离 HTML 标签与控制字符、压缩空行、限制长度（保留末尾省略号）。 */
+  private fun sanitizeAnnouncement(text: String?): String? {
+    if (text.isNullOrEmpty()) return null
+    var s = text.replace(Regex("<[^>]*>"), "")
+    // 剥离控制字符（保留 \n \t 维持排版）。
+    s = s.replace(Regex("[\\p{Cntrl}&&[^\\n\\t]]"), "")
+    // 折叠超过 2 个的连续换行。
+    s = s.replace(Regex("\\n{3,}"), "\n\n")
+    if (s.length > 4000) s = s.take(4000) + "…"
+    return s.trim().takeIf { it.isNotEmpty() }
   }
 
   /** 显示公告加载占位（拉取期间调用）。 */

@@ -2,9 +2,11 @@ package com.dshmobile.shell
 
 import android.content.Context
 import android.graphics.Typeface
+import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 import java.io.File
 
 /**
@@ -40,16 +42,45 @@ class TerminalScreen(
 
   init {
     orientation = LinearLayout.VERTICAL
-    setBackgroundColor(resources.getColor(R.color.bg, null))
+    background = resources.getDrawable(R.drawable.bg_screen_translucent, null)
     setPadding(dp(16), dp(16), dp(16), dp(16))
 
-    // 页面标题
+    // 页面标题 + 复制全部按钮（同一行：标题占满剩余宽度，按钮靠右）
     addView(
-      TextView(context).apply {
-        text = I18n.t(context, "终端", "Terminal")
-        textSize = 18f
-        typeface = Typeface.DEFAULT_BOLD
-        setTextColor(resources.getColor(R.color.text, null))
+      LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = android.view.Gravity.CENTER_VERTICAL
+
+        addView(
+          TextView(context).apply {
+            text = I18n.t(context, "终端", "Terminal")
+            textSize = 18f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(resources.getColor(R.color.text, null))
+          },
+          LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f),
+        )
+
+        // 复制全部：accent 色粗体小按钮，足够大的点击区域
+        addView(
+          TextView(context).apply {
+            text = I18n.t(context, "复制全部", "Copy all")
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(resources.getColor(R.color.accent, null))
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            setOnClickListener {
+              terminalView.copyAll {
+                Toast.makeText(
+                  context,
+                  I18n.t(context, "日志已复制", "Log copied"),
+                  Toast.LENGTH_SHORT,
+                ).show()
+              }
+            }
+          },
+          LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT),
+        )
       },
       LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(12) },
     )
