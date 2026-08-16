@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+  <!-- APK 下载（DownloadManager 写入外部缓存目录） -->
+  <external-cache-path name="apk_cache" path="." />
+  <!-- 日志/报告分享：filesDir/logs/ -->
+  <files-path name="logs" path="logs/" />
+  <!-- 调试导出 zip：公共 Documents/dshdata/ -->
+  <external-path name="documents" path="Documents/dshdata/" />
+</paths>

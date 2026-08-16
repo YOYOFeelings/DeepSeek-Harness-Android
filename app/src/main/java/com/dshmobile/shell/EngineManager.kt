@@ -218,12 +218,8 @@ class EngineManager(private val context: Context, private val pickToken: String?
       test.delete()
     } catch (t: Throwable) {
       Log.e(TAG, "profiles 目录不可写（Web 保存插件/配置会失败）: " + t.message)
-      try {
-        File(context.filesDir, "engine.log").appendText(
-          "[警告] profiles 目录不可写，Web 控制页保存的插件/配置可能丢失: " + t.message + "\n",
-        )
-      } catch (_: Throwable) {
-      }
+      Logs.append(Logs.engineLog(context), "[警告] profiles 目录不可写，Web 控制页保存的插件/配置可能丢失: " + t.message)
+      Logs.logE(context, TAG, "profiles 目录不可写", t)
     }
     val privateMarker = File(privateDsh, ".private-layout")
     if (privateMarker.exists()) {
@@ -444,10 +440,8 @@ class EngineManager(private val context: Context, private val pickToken: String?
     val preload = File(usrDir, "lib/libtermux-exec-ld-preload.so")
     if (!preload.exists()) {
       Log.e(TAG, "engine start failed: termux-exec preload missing at " + preload.absolutePath)
-      try {
-        File(context.filesDir, "engine.log").writeText("termux-exec preload 缺失: " + preload.absolutePath + "\n")
-      } catch (_: Throwable) {
-      }
+      Logs.append(Logs.engineLog(context), "termux-exec preload 缺失: " + preload.absolutePath)
+      Logs.logE(context, TAG, "termux-exec preload 缺失: " + preload.absolutePath)
       return false
     }
     val now = System.currentTimeMillis()
@@ -500,6 +494,7 @@ class EngineManager(private val context: Context, private val pickToken: String?
       true
     } catch (t: Throwable) {
       Log.e(TAG, "engine start failed", t)
+      Logs.logE(context, TAG, "引擎启动失败", t)
       false
     } finally {
       STARTING.set(false)
@@ -513,7 +508,7 @@ class EngineManager(private val context: Context, private val pickToken: String?
    * mechanism as native libraries (always permitted for app data).
    */
   private fun startWithArgs(args: Array<String>, env: Map<String, String>): Process {
-    val log = File(context.filesDir, "engine.log")
+    val log = Logs.engineLog(context)
     fun build(argv: List<String>): ProcessBuilder =
       ProcessBuilder(argv).also { b ->
         b.environment().putAll(env)
@@ -544,7 +539,7 @@ class EngineManager(private val context: Context, private val pickToken: String?
 
   /** 读取 engine.log 末尾若干行（引擎启动失败诊断用；无日志返回空串）。 */
   fun engineLogTail(maxLines: Int = 40): String {
-    val log = File(context.filesDir, "engine.log")
+    val log = Logs.engineLog(context)
     if (!log.exists()) return ""
     return try {
       log.readLines().takeLast(maxLines).joinToString("\n")

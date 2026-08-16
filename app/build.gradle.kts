@@ -1,7 +1,18 @@
+import java.util.Properties
+
 plugins {
   id("com.android.application")
   id("org.jetbrains.kotlin.android")
 }
+
+// 项目专用签名：从根目录 keystore.properties 读取密钥库配置。
+// debug 与 release 统一使用同一密钥库，保证每次构建 APK 签名一致
+// （同一 APK 必须同一签名，否则覆盖安装会因签名不一致失败）。
+val keystorePropsFile = rootProject.file("keystore.properties")
+val keystoreProps = Properties().apply {
+  if (keystorePropsFile.exists()) keystorePropsFile.inputStream().use { load(it) }
+}
+val hasKeystore = keystorePropsFile.exists()
 
 android {
   namespace = "com.dshmobile.shell"
@@ -14,8 +25,19 @@ android {
     // (the embedded engine, bash, and every child command would need linker64
     // wrappers); 34 keeps native exec working on Android 15/16 devices.
     targetSdk = 34
-    versionCode = 9
-    versionName = "0.10.8"
+    versionCode = 10
+    versionName = "0.10.9"
+  }
+
+  signingConfigs {
+    if (hasKeystore) {
+      create("project") {
+        storeFile = rootProject.file(keystoreProps.getProperty("storeFile", "keystore/release.jks"))
+        storePassword = keystoreProps.getProperty("storePassword", "")
+        keyAlias = keystoreProps.getProperty("keyAlias", "dsh")
+        keyPassword = keystoreProps.getProperty("keyPassword", "")
+      }
+    }
   }
 
   androidResources {
@@ -24,8 +46,13 @@ android {
   }
 
   buildTypes {
+    debug {
+      // debug 与 release 使用同一项目签名，保证升级安装签名一致。
+      if (hasKeystore) signingConfig = signingConfigs.getByName("project")
+    }
     release {
       isMinifyEnabled = false
+      if (hasKeystore) signingConfig = signingConfigs.getByName("project")
     }
   }
 
@@ -71,6 +98,16 @@ tasks.matching { it.name == "assembleDebug" }.configureEach {
     val apkDir = layout.buildDirectory.dir("outputs/apk/debug").get().asFile
     apkDir.listFiles { f -> f.name.endsWith(".apk") }?.forEach { f ->
       val dest = file("${rootDir}/deepseek-harness-${harnessVersionName}-debug.apk")
+      f.copyTo(dest, overwrite = true)
+      println("APK 已复制到: ${dest.absolutePath}")
+    }
+  }
+}
+tasks.matching { it.name == "assembleRelease" }.configureEach {
+  doLast {
+    val apkDir = layout.buildDirectory.dir("outputs/apk/release").get().asFile
+    apkDir.listFiles { f -> f.name.endsWith(".apk") }?.forEach { f ->
+      val dest = file("${rootDir}/deepseek-harness-${harnessVersionName}-release.apk")
       f.copyTo(dest, overwrite = true)
       println("APK 已复制到: ${dest.absolutePath}")
     }

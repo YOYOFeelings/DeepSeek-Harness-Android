@@ -67,19 +67,30 @@ class UpdateManager(private val context: Context) {
    * 返回最快且可用（能拉到内容）的源；全部失败返回 null。
    * @param onLatency (mirror, latencyMs|null) 每源回调，可在主线程刷新 UI。
    */
-  fun selectFastestMirror(onLatency: (Mirror, Long?) -> Unit = { _, _ -> }): Mirror? {
+  fun selectFastestMirror(onLatency: (Mirror, Long?) -> Unit = { _, _ -> }): Mirror? =
+    speedTestAll(onLatency)
+
+  /** 与 [selectFastestMirror] 等价，提供全量逐源延迟回调（测速弹窗展示用）。 */
+  fun speedTestAll(onEach: (Mirror, Long?) -> Unit = { _, _ -> }): Mirror? {
     var fastest: Mirror? = null
     var best = Long.MAX_VALUE
     for (m in allMirrors()) {
       val ms = measureMirror(m)
-      onLatency(m, ms)
+      onEach(m, ms)
       if (ms != null && ms < best) {
         best = ms
         fastest = m
       }
     }
+    if (fastest == null) {
+      Logs.logE(context, "update", "自动测速失败：所有更新源均不可用")
+    }
     return fastest
   }
+
+  /** 用指定（或当前激活）镜像解析 URL（APK 下载、公告拉取等复用；无前缀源原样返回）。 */
+  fun resolveForDownload(url: String, mirror: Mirror? = null): String =
+    (mirror ?: activeMirror)?.resolve(url) ?: url
 
   /** 实测某源拉取 manifest 的延迟；不可用返回 null。 */
   private fun measureMirror(m: Mirror): Long? = try {
@@ -211,6 +222,7 @@ class UpdateManager(private val context: Context) {
         )
         onStage("完成", "更新完成，引擎将自动重启")
       } catch (t: Throwable) {
+        Logs.logE(context, "update", "运行时更新失败", t)
         if (downloadAttempted) {
           DownloadHistory.add(
             context,

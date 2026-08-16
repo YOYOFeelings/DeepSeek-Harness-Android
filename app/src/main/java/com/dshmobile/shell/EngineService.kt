@@ -38,6 +38,11 @@ class EngineService : Service() {
   override fun onDestroy() {
     watchdog?.shutdownNow()
     watchdog = null
+    // Service 被销毁时回收引擎进程，避免产生孤儿进程（基线四改法之一）。
+    try {
+      engineManager.stopEngine()
+    } catch (_: Throwable) {
+    }
     super.onDestroy()
   }
 

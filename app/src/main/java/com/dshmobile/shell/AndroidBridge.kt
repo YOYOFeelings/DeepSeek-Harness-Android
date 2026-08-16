@@ -67,17 +67,35 @@ class AndroidBridge(
   @JavascriptInterface
   fun getPickToken(): String? = pickToken
 
-  /** 配置桥：把 key/value 持久化到 dsh_shell SharedPreferences，返回是否写盘成功。 */
+  /** 配置桥：把 key/value 持久化到 dsh_shell SharedPreferences，返回是否写盘成功。
+   *  对 key 做注入防护：长度 ≤ 128、仅允许 [A-Za-z0-9._-]、拒绝 `..`/`/` 与空键，
+   *  防止路径注入/越权键（基线四改法之一）。 */
   @JavascriptInterface
-  fun saveConfig(key: String, value: String): Boolean =
-    context.getSharedPreferences("dsh_shell", android.content.Context.MODE_PRIVATE)
+  fun saveConfig(key: String, value: String): Boolean {
+    if (!isSafeConfigKey(key)) {
+      Logs.logE(context, "bridge", "saveConfig 拒绝非法键: " + (key ?: "null"))
+      return false
+    }
+    return context.getSharedPreferences("dsh_shell", android.content.Context.MODE_PRIVATE)
       .edit().putString(key, value).commit()
+  }
 
-  /** 配置桥：读取 dsh_shell SharedPreferences 中的字符串配置（缺失返回空串）。 */
+  /** 配置桥：读取 dsh_shell SharedPreferences 中的字符串配置（缺失返回空串）。
+   *  与 [saveConfig] 同款键名校验，防止构造路径型键越权读取。 */
   @JavascriptInterface
-  fun readConfig(key: String): String =
-    context.getSharedPreferences("dsh_shell", android.content.Context.MODE_PRIVATE)
+  fun readConfig(key: String): String {
+    if (!isSafeConfigKey(key)) return ""
+    return context.getSharedPreferences("dsh_shell", android.content.Context.MODE_PRIVATE)
       .getString(key, "") ?: ""
+  }
+
+  /** 键名校验：非空、长度 ≤ 128、仅允许 [A-Za-z0-9._-]，不含 `..` 或 `/`。 */
+  private fun isSafeConfigKey(key: String): Boolean {
+    if (key.isEmpty() || key.length > 128) return false
+    if (!Regex("^[A-Za-z0-9._-]+$").matches(key)) return false
+    if (key.contains("..") || key.contains('/')) return false
+    return true
+  }
 
   /** 配置桥：把 settings.yaml 全文写入 DSH_HOME（失败返回 false）。 */
   @JavascriptInterface

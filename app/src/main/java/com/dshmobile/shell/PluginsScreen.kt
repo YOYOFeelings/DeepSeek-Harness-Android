@@ -43,7 +43,7 @@ class PluginsScreen(context: Context, private val callbacks: Callbacks) : Linear
     }
     head.addView(
       TextView(context).apply {
-        text = "插件"
+        text = I18n.t(context, "插件", "Plugins")
         textSize = 18f
         typeface = Typeface.DEFAULT_BOLD
         setTextColor(resources.getColor(R.color.text, null))
@@ -51,7 +51,7 @@ class PluginsScreen(context: Context, private val callbacks: Callbacks) : Linear
       },
     )
     head.addView(
-      flatButton("导入插件", accent = true) { callbacks.onImportPlugin() },
+      flatButton(I18n.t(context, "导入插件", "Import plugin"), accent = true) { callbacks.onImportPlugin() },
       LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT),
     )
     addView(head, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
@@ -148,7 +148,7 @@ class PluginsScreen(context: Context, private val callbacks: Callbacks) : Linear
     val plugins = collectPlugins(modulesDir)
     if (plugins.isEmpty()) {
       rows.addView(TextView(context).apply {
-        text = "暂无插件，点右上角「导入插件」安装本地 .tgz 包"
+        text = I18n.t(context, "暂无插件，点右上角「导入插件」安装本地 .tgz 包", "No plugins yet. Tap \"Import plugin\" to install a local .tgz package.")
         textSize = 13f
         setTextColor(resources.getColor(R.color.text_secondary, null))
         setPadding(0, dp(8), 0, dp(8))
@@ -239,9 +239,9 @@ class PluginsScreen(context: Context, private val callbacks: Callbacks) : Linear
     )
     val isSystem = source == "系统"
     val chipText = when {
-      isSystem -> "核心"
-      disabled -> "已停用"
-      else -> "已启用"
+      isSystem -> I18n.t(context, "核心", "Core")
+      disabled -> I18n.t(context, "已停用", "Disabled")
+      else -> I18n.t(context, "已启用", "Enabled")
     }
     top.addView(TextView(context).apply {
       text = chipText
@@ -267,7 +267,7 @@ class PluginsScreen(context: Context, private val callbacks: Callbacks) : Linear
     if (!isSystem) {
       // 来源小字：区分全局/系统插件与各 profile 安装的插件
       card.addView(TextView(context).apply {
-        text = "来源：profile $source"
+        text = I18n.t(context, "来源：", "Source: ") + "profile " + source
         textSize = 11f
         setTextColor(resources.getColor(R.color.text_secondary, null))
         layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(2) }
@@ -277,11 +277,11 @@ class PluginsScreen(context: Context, private val callbacks: Callbacks) : Linear
         layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) }
       }
       actions.addView(
-        flatButton("卸载", accent = false) { confirmUninstall(name, dir) },
+        flatButton(I18n.t(context, "卸载", "Uninstall"), accent = false) { confirmUninstall(name, dir) },
         LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(6) },
       )
       actions.addView(
-        flatButton(if (disabled) "启用" else "停用", accent = true) { toggleDisabled(name, dir, disabled) },
+        flatButton(if (disabled) I18n.t(context, "启用", "Enable") else I18n.t(context, "停用", "Disable"), accent = true) { toggleDisabled(name, dir, disabled) },
         LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f),
       )
       card.addView(actions)
@@ -292,15 +292,15 @@ class PluginsScreen(context: Context, private val callbacks: Callbacks) : Linear
   /** 卸载确认对话框 → 删除插件目录。 */
   private fun confirmUninstall(name: String, dir: File) {
     android.app.AlertDialog.Builder(context)
-      .setTitle("卸载插件")
-      .setMessage("确定卸载 $name 吗？将删除其目录，重启引擎后不再加载。")
-      .setPositiveButton("卸载") { _, _ ->
+      .setTitle(I18n.t(context, "卸载插件", "Uninstall plugin"))
+      .setMessage(I18n.t(context, "确定卸载 $name 吗？将删除其目录，重启引擎后不再加载。", "Uninstall $name? Its directory will be deleted and it won't load after an engine restart."))
+      .setPositiveButton(I18n.t(context, "卸载", "Uninstall")) { _, _ ->
         dir.deleteRecursively()
         val disabledDir = File(dir.parentFile, dir.name + ".disabled")
         disabledDir.deleteRecursively()
         refresh()
       }
-      .setNegativeButton("取消", null)
+      .setNegativeButton(I18n.t(context, "取消", "Cancel"), null)
       .show()
   }
 

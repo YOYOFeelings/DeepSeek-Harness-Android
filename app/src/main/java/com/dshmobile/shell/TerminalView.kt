@@ -3,6 +3,7 @@ package com.dshmobile.shell
 import android.content.Context
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.util.TypedValue
 import android.view.View
 import android.widget.ScrollView
@@ -23,6 +24,7 @@ import java.util.Locale
  *    日志写入用 [logLock] 加锁保证并发安全（下载进度更新可能非常频繁）。
  */
 class TerminalView(context: Context, private val logFile: File? = null) : ScrollView(context) {
+  private val fileLog: File = logFile ?: Logs.terminalLog(context)
 
   /** 唯一子控件：等宽字体、深色底、浅色字，模拟终端外观。 */
   private val textView = TextView(context).apply {
@@ -48,14 +50,20 @@ class TerminalView(context: Context, private val logFile: File? = null) : Scroll
   /** 日志文件写入锁：进度更新可能来自多个线程/协程，appendText 本身不是原子的。 */
   private val logLock = Any()
 
-  /** 独立详细日志文件（appendDetail 专用），与 [logFile] 同目录。 */
-  private val detailLogFile: File? =
-    logFile?.let { File(it.parentFile, it.nameWithoutExtension + "-detail.log") }
+  /** 独立详细日志文件（appendDetail 专用），与 [fileLog] 同目录。 */
+  private val detailLogFile: File =
+    File(fileLog.parentFile, fileLog.nameWithoutExtension + "-detail.log")
 
   init {
     // 背景必须设在 ScrollView 上：TextView 高度是 WRAP_CONTENT，内容不满一屏时
     // 下方空白区域也会露出黑色底，否则会透出默认白底，破坏终端观感。
-    setBackgroundColor(Color.parseColor("#0f1720"))
+    // 圆角终端：GradientDrawable 圆角 + 深色底（用户要求的终端圆角优化）。
+    background = GradientDrawable().apply {
+      shape = GradientDrawable.RECTANGLE
+      setColor(Color.parseColor("#0f1720"))
+      cornerRadius = dp(12).toFloat()
+    }
+    clipToOutline = true
     addView(
       textView,
       LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
@@ -93,16 +101,23 @@ class TerminalView(context: Context, private val logFile: File? = null) : Scroll
 
   /**
    * 追加/原地更新一条带进度的行。
-   * - total > 0 且 done >= 0 时按“MB 一位小数”格式化成进度行；若上一行也是同一
-   *   stage 的进度行，则覆盖上一行而不是无限堆叠新行——这才是终端里实时进度条的观感。
+   * - total > 0 且 done >= 0 时输出固定宽度的 ASCII 进度条
+   *   `[stage] message… [██████░░░░░] 12.3/70.0 MB 18%`：宽度固定（20 格），
+   *   不会随数字位数变化而抖动/换行异常；若上一行也是同一 stage 的进度行，
+   *   则覆盖上一行而不是无限堆叠新行——这才是终端里实时进度条的观感。
    * - 否则（total <= 0）退化为普通文本行 `[stage] message`。
    */
   fun appendProgress(stage: String, message: String, done: Long, total: Long) {
     if (total > 0 && done >= 0) {
+      val clamped = done.coerceAtMost(total)
+      val pct = (clamped * 100 / total).toInt().coerceIn(0, 100)
+      val barLen = 20
+      val filled = (clamped * barLen / total).toInt().coerceIn(0, barLen)
+      val bar = "\u2588".repeat(filled) + "\u2591".repeat(barLen - filled)
       val line = String.format(
         Locale.US,
-        "[%s] %s…  %.1f/%.1f MB (%d%%)",
-        stage, message, done / 1048576f, total / 1048576f, (done.coerceAtMost(total)) * 100 / total
+        "[%s] %s… [%s] %.1f/%.1f MB %d%%",
+        stage, message, bar, done / 1048576f, total / 1048576f, pct
       )
       post {
         val replace = lastStage == stage && lastLive
@@ -150,7 +165,7 @@ class TerminalView(context: Context, private val logFile: File? = null) : Scroll
 
   /** 把一行文本镜像写入日志文件（若配置了 logFile）。失败静默，不影响终端展示。 */
   private fun mirrorToLog(line: String) {
-    val file = logFile ?: return
+    val file = fileLog
     synchronized(logLock) {
       try {
         file.parentFile?.mkdirs()
@@ -163,7 +178,7 @@ class TerminalView(context: Context, private val logFile: File? = null) : Scroll
 
   /** 把一行文本镜像写入独立详细日志文件（appendDetail 专用）。 */
   private fun mirrorToDetailLog(line: String) {
-    val file = detailLogFile ?: return
+    val file = detailLogFile
     synchronized(logLock) {
       try {
         file.parentFile?.mkdirs()
@@ -175,7 +190,7 @@ class TerminalView(context: Context, private val logFile: File? = null) : Scroll
 
   /** 把日志文件截断为空。与 [mirrorToLog] 共用同一把锁，避免交错写入。 */
   private fun truncateLog() {
-    val file = logFile ?: return
+    val file = fileLog
     synchronized(logLock) {
       try {
         file.parentFile?.mkdirs()
@@ -187,7 +202,7 @@ class TerminalView(context: Context, private val logFile: File? = null) : Scroll
 
   /** 清空独立详细日志文件。 */
   private fun truncateDetailLog() {
-    val file = detailLogFile ?: return
+    val file = detailLogFile
     synchronized(logLock) {
       try {
         file.parentFile?.mkdirs()

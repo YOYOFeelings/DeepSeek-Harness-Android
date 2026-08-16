@@ -2,8 +2,11 @@ package com.dshmobile.shell
 
 import android.Manifest
 import android.app.AlertDialog
+import android.app.DownloadManager
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.content.res.Configuration
@@ -11,6 +14,7 @@ import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -19,10 +23,13 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.lifecycle.lifecycleScope
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.launch
 
 /**
  * 壳层 Activity（Flat Minimalist 设计）：启动后直接进入「终端」主页。
@@ -44,6 +51,46 @@ class MainActivity : ComponentActivity() {
 
   /** 运行时环境（Node.js / Python）在线安装/升级管理器。 */
   private val envManager by lazy { EnvManager(this) }
+
+  /** APK 自更新管理器（独立于 usr 运行时更新）。 */
+  private val apkUpdateManager by lazy { ApkUpdateManager(this) }
+
+  /** 待处理的 APK 更新信息（供强制更新弹框 onResume 复用）。 */
+  @Volatile private var lastUpdateInfo: ApkUpdateManager.UpdateInfo? = null
+
+  /** 强制更新未完成：阻断引导/主页/引擎流程。 */
+  @Volatile private var apkUpdatePending = false
+
+  /** 用户已选择更新但等待安装权限授权时的待下载地址。 */
+  @Volatile private var apkDownloadPendingUrl: String? = null
+
+  /** 启动流程只允许触发一次。 */
+  private val flowStarted = AtomicBoolean(false)
+
+  /** APK 下载完成广播接收：匹配 downloadId 后触发系统安装。 */
+  private val apkDownloadReceiver = object : BroadcastReceiver() {
+    override fun onReceive(c: Context, intent: Intent) {
+      if (intent.action == DownloadManager.ACTION_DOWNLOAD_COMPLETE) {
+        val id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L)
+        if (id == apkUpdateManager.lastDownloadId()) {
+          val apk = apkUpdateManager.findDownloadedApk()
+          if (apk != null) {
+            try { apkUpdateManager.installApk(apk) } catch (_: Throwable) { }
+          }
+        }
+      }
+    }
+  }
+
+  /** 安装来源授权结果：返回后若已授权且有待下载更新，继续下载。 */
+  private val installPermissionLauncher =
+    registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+      val url = apkDownloadPendingUrl
+      if (url != null && apkUpdateManager.canInstall()) {
+        apkDownloadPendingUrl = null
+        startApkDownload(url)
+      }
+    }
 
   /** 目录选择桥鉴权 token（引擎侧 pick 端点校验；DSH_PICK_TOKEN）。 */
   private val pickToken: String by lazy { java.util.UUID.randomUUID().toString() }
@@ -146,6 +193,8 @@ class MainActivity : ComponentActivity() {
       override fun onInstallEnv() = runInstallEnv()
       override fun onOpenPlugins() { showTab(Tab.PLUGINS) }
       override fun onClearCache() = clearCache()
+      override fun onCheckApkUpdate() = checkApkUpdateManually()
+      override fun onReloadAnnouncement() = loadAnnouncement()
     })
     contentFrame.addView(constrained(terminalScreen), centeredParams())
     pluginsScreen = PluginsScreen(this, object : PluginsScreen.Callbacks {
@@ -177,6 +226,8 @@ class MainActivity : ComponentActivity() {
       override fun onOpenAllFilesAccessSettings() = openAllFilesAccessSettings()
       override fun onClearCache() = clearCache()
       override fun onViewEngineLog() = viewEngineLog()
+      override fun onCheckApkUpdate() = checkApkUpdateManually()
+      override fun onLanguageChanged() = rebuildUiLanguage()
     })
     contentFrame.addView(constrained(settingsScreen), centeredParams())
     settingsScreen.visibility = View.GONE
@@ -217,11 +268,25 @@ class MainActivity : ComponentActivity() {
         }
       }
     })
-    startFlow()
+    registerDownloadReceiver()
+    startWithApkCheck()
+    loadAnnouncement()
   }
 
   override fun onResume() {
     super.onResume()
+    // APK 强制更新未完成：重新弹框阻断，不进入任何引擎/主页流程。
+    if (apkUpdatePending) {
+      showApkUpdateDialog()
+      return
+    }
+    // 从「安装未知应用」设置页返回且已授权 → 继续此前被挂起的下载。
+    apkDownloadPendingUrl?.let { url ->
+      if (apkUpdateManager.canInstall()) {
+        apkDownloadPendingUrl = null
+        startApkDownload(url)
+      }
+    }
     // 引导页展示期间不启动引擎流程（等待「开始使用」）。
     if (guideActive) return
     // 引导期间不启动引擎流程（安装/更新管线在跑，避免双启动竞态）。
@@ -241,6 +306,7 @@ class MainActivity : ComponentActivity() {
 
   override fun onDestroy() {
     super.onDestroy()
+    runCatching { unregisterReceiver(apkDownloadReceiver) }
     webView.destroy()
     // 引擎由 EngineService 前台服务保活（后台继续运行），此处不再杀引擎。
   }
@@ -281,6 +347,11 @@ class MainActivity : ComponentActivity() {
     }
   }
 
+  /** 启动流程只触发一次（APK 检查/非强制更新弹框关闭后均可能调用）。 */
+  private fun startFlowOnce() {
+    if (flowStarted.compareAndSet(false, true)) startFlow()
+  }
+
   /** 入口：未看过引导页 → 先展示全屏引导页；否则 → 进安装（未装完）或主页（已装完）。 */
   private fun startFlow() {
     if (!prefs.getBoolean("guide_seen", false)) {
@@ -302,23 +373,255 @@ class MainActivity : ComponentActivity() {
     }
   }
 
+  /** 入口：先执行 APK 版本检查，再进入正常启动流程。 */
+  private fun startWithApkCheck() {
+    lifecycleScope.launch {
+      apkUpdateManager.checkUpdate(
+        onResult = { info ->
+          lastUpdateInfo = info
+          if (info.hasNew) {
+            presentApkUpdate(info)
+          } else {
+            startFlowOnce()
+          }
+        },
+        onError = { _ -> startFlowOnce() },
+      )
+    }
+  }
+
+  /** 统一处理更新信息：强制则阻断并弹不可取消框；普通则弹可稍后提醒框。 */
+  private fun presentApkUpdate(info: ApkUpdateManager.UpdateInfo) {
+    lastUpdateInfo = info
+    if (info.isForced) apkUpdatePending = true
+    showApkUpdateDialog()
+  }
+
+  /** 展示 APK 更新弹窗（强制不可取消；普通关闭后恢复启动流程）。 */
+  private fun showApkUpdateDialog() {
+    val info = lastUpdateInfo ?: return
+    apkUpdateManager.showUpdateDialog(
+      info,
+      forced = info.isForced,
+      onDownload = { url -> onUserChooseApkUpdate(url) },
+      onOpenInstallSettings = { openInstallPermissionSettings() },
+      onDismissed = { if (!info.isForced) startFlowOnce() },
+    )
+  }
+
+  /** 用户点击「立即更新」：未授权安装来源先引导设置，否则直接下载。 */
+  private fun onUserChooseApkUpdate(url: String) {
+    if (!apkUpdateManager.canInstall()) {
+      apkDownloadPendingUrl = url
+      openInstallPermissionSettings()
+    } else {
+      startApkDownload(url)
+    }
+  }
+
+  /** 跳转「安装未知应用」设置页。 */
+  private fun openInstallPermissionSettings() {
+    try {
+      installPermissionLauncher.launch(
+        Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")),
+      )
+    } catch (_: Throwable) {
+      Toast.makeText(this, I18n.t(this, "请到系统设置中开启「安装未知应用」权限", "Please enable \"Install unknown apps\" in system settings"), Toast.LENGTH_LONG).show()
+    }
+  }
+
+  /** 启动 DownloadManager 下载，并清除强制更新阻断标记（下载+安装流程接管）。 */
+  private fun startApkDownload(url: String) {
+    try {
+      apkUpdateManager.startDownload(url)
+      apkUpdatePending = false
+      Toast.makeText(this, I18n.t(this, "已开始下载更新，完成后将自动安装", "Download started; it will be installed automatically when finished"), Toast.LENGTH_SHORT).show()
+    } catch (t: Throwable) {
+      Toast.makeText(this, I18n.t(this, "下载启动失败：", "Failed to start download: ") + (t.message ?: "未知错误"), Toast.LENGTH_LONG).show()
+    }
+  }
+
+  /** 注册 DownloadManager 下载完成广播（Android 13+ 需显式导出标志）。 */
+  private fun registerDownloadReceiver() {
+    val filter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
+    if (Build.VERSION.SDK_INT >= 33) {
+      registerReceiver(apkDownloadReceiver, filter, Context.RECEIVER_EXPORTED)
+    } else {
+      registerReceiver(apkDownloadReceiver, filter)
+    }
+  }
+
+  /** 手动检查 APK 更新（设置/主页「检查应用更新」按钮）：先弹窗测速选最快源，再检查下载。 */
+  private fun checkApkUpdateManually() {
+    showSpeedTestDialog { fastest ->
+      if (fastest != null) {
+        prefs.edit().putString("active_mirror_id", fastest.id).apply()
+        terminalScreen.terminal().appendLine(
+          I18n.t(this, "已选择最快更新源：", "Fastest source selected: ") + fastest.name,
+        )
+      } else {
+        terminalScreen.terminal().appendLine(
+          I18n.t(this, "测速失败，将使用默认更新源重试", "Speed test failed; retrying with the default source"),
+        )
+      }
+      lifecycleScope.launch {
+        apkUpdateManager.checkUpdate(
+          onResult = { info ->
+            lastUpdateInfo = info
+            if (info.hasNew) {
+              presentApkUpdate(info)
+            } else {
+              Toast.makeText(this@MainActivity, I18n.t(this@MainActivity, "当前已是最新版本", "You're up to date"), Toast.LENGTH_SHORT).show()
+            }
+          },
+          onError = { err ->
+            Toast.makeText(this@MainActivity, I18n.t(this@MainActivity, "检查更新失败：", "Update check failed: ") + err, Toast.LENGTH_LONG).show()
+          },
+        )
+      }
+    }
+  }
+
+  /** 语言切换后重建界面：各页面在 onCreate 时按当前语言取文案（默认中文 + 英文导航入口）。 */
+  private fun rebuildUiLanguage() {
+    recreate()
+  }
+
+  /** 拉取公告（主页公告卡）：结果回主线程更新 TerminalScreen 公告区。 */
+  private fun loadAnnouncement() {
+    terminalScreen.setAnnouncementLoading(true)
+    AnnouncementManager.load(this) { text ->
+      runOnUiThread {
+        terminalScreen.setAnnouncementLoading(false)
+        terminalScreen.setAnnouncement(text)
+      }
+    }
+  }
+
+  /** 更新源测速弹窗：逐源实测延迟并实时刷新，完成后回调最快源（全失败回调 null）。
+   *  满足「点击更新时弹窗自动检测各更新源速度并选择最快源进行更新」。 */
+  private fun showSpeedTestDialog(onComplete: (Mirror?) -> Unit) {
+    val um = UpdateManager.forPrefs(this)
+    val sources = um.allMirrors()
+    val labels = mutableListOf<TextView>()
+    val container = LinearLayout(this).apply {
+      orientation = LinearLayout.VERTICAL
+    }
+    for (m in sources) {
+      val row = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(0, dp(4), 0, dp(4))
+      }
+      row.addView(
+        TextView(this).apply {
+          text = m.name
+          textSize = 13f
+          typeface = Typeface.DEFAULT_BOLD
+          setTextColor(resources.getColor(R.color.text, null))
+          layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        },
+      )
+      val latency = TextView(this).apply {
+        text = I18n.t(this@MainActivity, "测速中…", "testing…")
+        textSize = 12f
+        setTextColor(resources.getColor(R.color.text_secondary, null))
+      }
+      labels.add(latency)
+      row.addView(latency)
+      container.addView(row)
+    }
+    val dialog = AlertDialog.Builder(this)
+      .setTitle(I18n.t(this, "检测各更新源速度…", "Testing update sources…"))
+      .setView(container)
+      .setCancelable(false)
+      .create()
+    dialog.show()
+    Thread {
+      val fastest = um.speedTestAll { m, ms ->
+        val idx = sources.indexOfFirst { it.id == m.id }
+        val text = if (ms != null) ms.toString() + " ms" else I18n.t(this, "不可用", "unavailable")
+        runOnUiThread { if (idx in labels.indices) labels[idx].text = text }
+      }
+      runOnUiThread {
+        dialog.dismiss()
+        onComplete(fastest)
+      }
+    }.start()
+  }
+
+  /** 引擎启动失败弹窗：展示详细错误日志报告（引擎日志 + 设备/架构诊断），支持下载与重试。
+   *  满足「引擎启动错误时弹窗显示详细错误日志报告并支持下载」。 */
+  private fun showEngineFailureDialog(reason: String) {
+    val tail = engineManager.engineLogTail(60)
+    val report = buildString {
+      append(I18n.t(this@MainActivity, "引擎启动失败：", "Engine failed to start: ")).append(reason).append('\n').append('\n')
+      append("Android ").append(Build.VERSION.RELEASE).append(" / SDK ").append(Build.VERSION.SDK_INT).append('\n')
+      append(I18n.t(this@MainActivity, "设备 ABI：", "Device ABI: "))
+        .append(Build.SUPPORTED_ABIS.joinToString()).append('\n')
+      append(I18n.t(this@MainActivity, "快照架构：", "Snapshot arch: "))
+        .append(engineManager.embeddedNodeArchLabel()).append('\n')
+      append('\n').append(I18n.t(this@MainActivity, "----- engine.log -----", "----- engine.log -----")).append('\n')
+      append(if (tail.isBlank()) I18n.t(this@MainActivity, "（无日志输出）", "(no log output)") else tail)
+    }
+    runOnUiThread {
+      AlertDialog.Builder(this)
+        .setTitle(I18n.t(this, "引擎启动失败", "Engine failed to start"))
+        .setMessage(report)
+        .setCancelable(false)
+        .setPositiveButton(I18n.t(this, "下载错误报告", "Download report")) { _, _ -> exportEngineErrorReport(report) }
+        .setNegativeButton(I18n.t(this, "重试", "Retry")) { _, _ -> restartEngine() }
+        .show()
+    }
+  }
+
+  /** 导出引擎错误报告为文本并调起系统分享（FileProvider，filesDir/logs 已在 file_paths 映射）。 */
+  private fun exportEngineErrorReport(report: String) {
+    Thread {
+      try {
+        val f = File(Logs.dir(this), "engine-error-report.txt")
+        f.writeText(report)
+        runOnUiThread { shareFile(f, "text/plain") }
+      } catch (t: Throwable) {
+        runOnUiThread {
+          Toast.makeText(this, I18n.t(this, "导出失败：", "Export failed: ") + (t.message ?: t.javaClass.simpleName), Toast.LENGTH_LONG).show()
+        }
+      }
+    }.start()
+  }
+
+  /** 通过 FileProvider 调起系统分享（支持日志 zip / 错误报告 txt）。 */
+  private fun shareFile(file: File, mime: String) {
+    try {
+      val uri = androidx.core.content.FileProvider.getUriForFile(this, packageName + ".fileprovider", file)
+      val intent = Intent(Intent.ACTION_SEND).apply {
+        type = mime
+        putExtra(Intent.EXTRA_STREAM, uri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+      }
+      startActivity(Intent.createChooser(intent, I18n.t(this, "分享日志", "Share logs")))
+    } catch (t: Throwable) {
+      Toast.makeText(this, I18n.t(this, "分享失败：", "Share failed: ") + (t.message ?: t.javaClass.simpleName), Toast.LENGTH_LONG).show()
+    }
+  }
+
   /** 首次安装：直接在主页终端内跑安装/更新管线（权限说明已并入引导页，不再重复弹窗）。 */
   private fun runOnboarding() {
     val term = terminalScreen.terminal()
-    term.appendLine("===== dsh 首次安装 =====")
-    term.appendLine("安装 dsh 配置/插件并更新到最新版…")
+    term.appendLine(I18n.t(this, "===== dsh 首次安装 =====", "===== dsh first install ====="))
+    term.appendLine(I18n.t(this, "安装 dsh 配置/插件并更新到最新版…", "Installing dsh config, plugins, and updating to the latest version…"))
     Thread { runBootstrapPipeline(term) }.start()
   }
 
   /** 所有文件访问权限的说明对话框（非阻断）："去授权"跳系统设置，"稍后"关闭。 */
   private fun showAllFilesAccessExplainDialog() {
     AlertDialog.Builder(this)
-      .setTitle("需要文件访问权限")
-      .setMessage("外部工作区需要「所有文件访问权限」，以便引擎（bash）能读写你选择的文件夹。")
-      .setPositiveButton("去授权") { _: android.content.DialogInterface?, _: Int ->
+      .setTitle(I18n.t(this, "需要文件访问权限", "File access required"))
+      .setMessage(I18n.t(this, "外部工作区需要「所有文件访问权限」，以便引擎（bash）能读写你选择的文件夹。", "The external workspace requires \"All files access\" so the engine (bash) can read/write your chosen folder."))
+      .setPositiveButton(I18n.t(this, "去授权", "Grant")) { _: android.content.DialogInterface?, _: Int ->
         openAllFilesAccessSettings()
       }
-      .setNegativeButton("稍后") { dialog: android.content.DialogInterface, _: Int ->
+      .setNegativeButton(I18n.t(this, "稍后", "Later")) { dialog: android.content.DialogInterface, _: Int ->
         dialog.dismiss()
       }
       .show()
@@ -326,9 +629,9 @@ class MainActivity : ComponentActivity() {
 
   /** 进入终端主页并确保引擎运行。 */
   private fun enterTerminal() {
-    terminalScreen.terminal().appendLine("===== dsh 终端 =====")
+    terminalScreen.terminal().appendLine(I18n.t(this, "===== dsh 终端 =====", "===== dsh terminal ====="))
     if (prefs.getBoolean("settings_auto_check_updates", true)) {
-      terminalScreen.terminal().appendLine("[检查更新] 已开启（GitHub 更新源配置中…）")
+      terminalScreen.terminal().appendLine(I18n.t(this, "[检查更新] 已开启（GitHub 更新源配置中…）", "[Check update] Enabled (configuring GitHub sources…)"))
     }
     // 设置页「启动时自动启动引擎」关闭时，不自动拉起引擎（可在终端页手动重启）。
     if (!autoStartEngineEnabled()) {
@@ -355,7 +658,7 @@ class MainActivity : ComponentActivity() {
 
   /** 把 engine.log 中「上次已读位置之后」的新行追加到终端（后台线程调用）。 */
   private fun drainEngineLog(term: TerminalView) {
-    val log = File(filesDir, "engine.log")
+    val log = Logs.engineLog(this)
     if (!log.exists()) return
     val len = log.length()
     if (len <= engineLogRead) return
@@ -372,12 +675,14 @@ class MainActivity : ComponentActivity() {
   }
 
   /** 启动引擎并轮询就绪；期间把 engine.log 实时流式输出到控制台。
+   *  @param showErrorDialog 失败时是否弹详细错误报告框（引导管线用 onBootstrapFatal，传 false）。
    *  @return true=就绪；false=超时/失败（日志已追加到终端）。 */
-  private fun startEngineWithStreaming(term: TerminalView): Boolean {
+  private fun startEngineWithStreaming(term: TerminalView, showErrorDialog: Boolean = true): Boolean {
     if (!engineManager.startEngine(force = true)) {
       term.appendLine("引擎启动失败")
       appendEngineDiagnostics(term)
       terminalScreen.setEngineStatus(false, "")
+      if (showErrorDialog) showEngineFailureDialog("startEngine 返回 false")
       return false
     }
     var started = false
@@ -388,6 +693,10 @@ class MainActivity : ComponentActivity() {
       Thread.sleep(500)
     }
     drainEngineLog(term)
+    if (!started && showErrorDialog) {
+      terminalScreen.setEngineStatus(false, "")
+      showEngineFailureDialog("引擎启动超时（180 次探测未就绪）")
+    }
     return started
   }
 
@@ -449,9 +758,9 @@ class MainActivity : ComponentActivity() {
 
     // 启动引擎并轮询就绪（期间流式输出 engine.log）。
     term.appendProgress("启动引擎", "启动 dsh 引擎", 0, 0)
-    File(filesDir, "engine.log").delete()
+    Logs.engineLog(this).delete()
     engineLogRead = 0
-    val started = startEngineWithStreaming(term)
+    val started = startEngineWithStreaming(term, showErrorDialog = false)
     if (!started) {
       term.appendLine("引擎启动超时")
       appendEngineDiagnostics(term)
@@ -545,7 +854,7 @@ class MainActivity : ComponentActivity() {
     term.appendLine("===== 重启引擎 =====")
     Thread {
       engineManager.stopEngine()
-      File(filesDir, "engine.log").delete()
+      Logs.engineLog(this).delete()
       engineLogRead = 0
       val started = startEngineWithStreaming(term)
       if (started) {
@@ -601,6 +910,7 @@ class MainActivity : ComponentActivity() {
             terminalScreen.terminal().appendLine(archDiagnostic())
             appendEngineDiagnostics(terminalScreen.terminal())
             terminalScreen.setEngineStatus(false, "")
+            showEngineFailureDialog("在线更新失败（架构不匹配）")
             return@Thread
           }
           terminalScreen.terminal().appendLine("匹配架构运行时已就绪")
@@ -821,7 +1131,7 @@ class MainActivity : ComponentActivity() {
     )
     header.addView(
       TextView(this).apply {
-        text = "本地 AI 终端壳层"
+        text = I18n.t(this@MainActivity, "本地 AI 终端壳层", "Local AI terminal shell")
         textSize = 14f
         setTextColor(resources.getColor(R.color.text_secondary, null))
       },
@@ -831,30 +1141,32 @@ class MainActivity : ComponentActivity() {
     // 可滚动内容（横竖屏自适应）
     val scroll = ScrollView(this).apply { isFillViewport = true }
     val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-    content.addView(sectionLabel("权限说明"))
+    content.addView(sectionLabel(I18n.t(this, "权限说明", "Permissions")))
     content.addView(permissionGuideRow(
-      R.drawable.ic_web, "网络",
-      "用于在线更新与多镜像源加速下载。",
-      "已授予（应用声明）", null, null,
+      R.drawable.ic_web, I18n.t(this, "网络", "Network"),
+      I18n.t(this, "用于在线更新与多镜像源加速下载。", "For online updates and multi-mirror accelerated downloads."),
+      I18n.t(this, "已授予（应用声明）", "Granted (declared)"), null, null,
     ))
     content.addView(permissionGuideRow(
-      R.drawable.ic_info, "通知权限 (Android 13+)",
-      "引擎事件 / 桥触发时显示系统通知。",
-      if (Build.VERSION.SDK_INT < 33) "不适用" else if (guideNotifGranted()) "已授权" else "未授权",
-      if (Build.VERSION.SDK_INT >= 33 && !guideNotifGranted()) "去授权" else null,
+      R.drawable.ic_info, I18n.t(this, "通知权限 (Android 13+)", "Notification permission (Android 13+)"),
+      I18n.t(this, "引擎事件 / 桥触发时显示系统通知。", "Show system notifications for engine/bridge events."),
+      if (Build.VERSION.SDK_INT < 33) I18n.t(this, "不适用", "N/A") else if (guideNotifGranted()) I18n.t(this, "已授权", "Granted") else I18n.t(this, "未授权", "Not granted"),
+      if (Build.VERSION.SDK_INT >= 33 && !guideNotifGranted()) I18n.t(this, "去授权", "Grant") else null,
     ) { requestNotificationPermission() })
     content.addView(permissionGuideRow(
-      R.drawable.ic_open, "所有文件访问 (Android 11+)",
-      "外部工作区需要该权限，引擎（bash）才能读写你选择的文件夹。",
-      if (Build.VERSION.SDK_INT < 30) "不适用" else if (guideFilesGranted()) "已授予" else "未授予",
-      if (Build.VERSION.SDK_INT >= 30 && !guideFilesGranted()) "去授权" else null,
+      R.drawable.ic_open, I18n.t(this, "所有文件访问 (Android 11+)", "All files access (Android 11+)"),
+      I18n.t(this, "外部工作区需要该权限，引擎（bash）才能读写你选择的文件夹。", "Required for external workspace; the engine (bash) needs it to read/write your chosen folder."),
+      if (Build.VERSION.SDK_INT < 30) I18n.t(this, "不适用", "N/A") else if (guideFilesGranted()) I18n.t(this, "已授予", "Granted") else I18n.t(this, "未授予", "Not granted"),
+      if (Build.VERSION.SDK_INT >= 30 && !guideFilesGranted()) I18n.t(this, "去授权", "Grant") else null,
     ) { openAllFilesAccessSettings() })
     content.addView(
-      sectionLabel("注意事项").apply { setPadding(0, dp(18), 0, dp(4)) },
+      sectionLabel(I18n.t(this, "注意事项", "Notes")).apply { setPadding(0, dp(18), 0, dp(4)) },
     )
     content.addView(
       TextView(this).apply {
-        text = "• 首次安装会自动解压运行时并在线更新，可能需要几分钟\n• 期间请保持网络畅通\n• 安装完成后自动进入主页"
+        text = I18n.t(this@MainActivity,
+          "• 首次安装会自动解压运行时并在线更新，可能需要几分钟\n• 期间请保持网络畅通\n• 安装完成后自动进入主页",
+          "• First install extracts the runtime and updates online; this may take a few minutes\n• Keep the network available during this time\n• You will enter the home screen automatically when done")
         textSize = 13f
         setLineSpacing(dp(4).toFloat(), 1f)
         setTextColor(resources.getColor(R.color.text, null))
@@ -866,7 +1178,7 @@ class MainActivity : ComponentActivity() {
     // 底部主按钮「开始使用」
     root.addView(
       TextView(this).apply {
-        text = "开始使用"
+        text = I18n.t(this@MainActivity, "开始使用", "Get started")
         textSize = 16f
         typeface = Typeface.DEFAULT_BOLD
         gravity = Gravity.CENTER
@@ -976,17 +1288,17 @@ class MainActivity : ComponentActivity() {
     }
     topBar.addView(
       TextView(this).apply {
-        text = "dsh Web 界面"
+        text = I18n.t(this@MainActivity, "dsh Web 界面", "dsh Web UI")
         textSize = 14f
         setTextColor(resources.getColor(R.color.text, null))
         layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
       }.also { webTitleText = it },
     )
     topBar.addView(
-      flatTopButton("刷新") { webView.reload() },
+      flatTopButton(I18n.t(this, "刷新", "Refresh")) { webView.reload() },
     )
     topBar.addView(
-      flatTopButton("浏览器") {
+      flatTopButton(I18n.t(this, "浏览器", "Browser")) {
         try {
           startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(EngineProbe.ENGINE_URL)))
         } catch (_: Throwable) {
@@ -994,7 +1306,7 @@ class MainActivity : ComponentActivity() {
       },
     )
     topBar.addView(
-      flatTopButton("关闭") {
+      flatTopButton(I18n.t(this, "关闭", "Close")) {
         webView.stopLoading()
         webOverlay.animate().alpha(0f).setDuration(150).withEndAction {
           webOverlay.visibility = View.GONE
@@ -1026,12 +1338,12 @@ class MainActivity : ComponentActivity() {
 
         override fun onPageStarted(view: android.webkit.WebView, url: String?, favicon: android.graphics.Bitmap?) {
           super.onPageStarted(view, url, favicon)
-          webTitleText.text = "加载中…"
-        }
+          webTitleText.text = I18n.t(this@MainActivity, "加载中…", "Loading…")
+      }
 
         override fun onPageFinished(view: android.webkit.WebView, url: String?) {
           super.onPageFinished(view, url)
-          webTitleText.text = "dsh Web 界面"
+          webTitleText.text = I18n.t(this@MainActivity, "dsh Web 界面", "dsh Web UI")
         }
 
         override fun onReceivedError(
@@ -1042,7 +1354,7 @@ class MainActivity : ComponentActivity() {
           super.onReceivedError(view, request, error)
           // -1 = ERR_ABORTED（用户取消/快速导航），忽略；仅主帧加载失败提示。
           if (request.isForMainFrame && error.errorCode != -1) {
-            webTitleText.text = "加载失败，请确认引擎运行，点「刷新」重试"
+            webTitleText.text = I18n.t(this@MainActivity, "加载失败，请确认引擎运行，点「刷新」重试", "Load failed. Check engine and tap Refresh to retry.")
           }
         }
 
@@ -1053,7 +1365,7 @@ class MainActivity : ComponentActivity() {
         ) {
           super.onReceivedHttpError(view, request, errorResponse)
           if (request.isForMainFrame) {
-            webTitleText.text = "加载失败（HTTP " + errorResponse.statusCode + "），点「刷新」重试"
+            webTitleText.text = I18n.t(this@MainActivity, "加载失败（HTTP ", "Load failed (HTTP ") + errorResponse.statusCode + "），" + I18n.t(this@MainActivity, "点「刷新」重试", "tap Refresh to retry")
           }
         }
       }
@@ -1143,9 +1455,9 @@ class MainActivity : ComponentActivity() {
     fun addTab(label: String, iconRes: Int, tab: Tab) {
       inner.addView(buildNavItem(label, iconRes, tab), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
     }
-    addTab("终端", R.drawable.ic_terminal, Tab.TERMINAL)
-    addTab("插件", R.drawable.ic_plugin, Tab.PLUGINS)
-    addTab("设置", R.drawable.ic_settings, Tab.SETTINGS)
+    addTab(I18n.t(this, "终端", "Terminal"), R.drawable.ic_terminal, Tab.TERMINAL)
+    addTab(I18n.t(this, "插件", "Plugins"), R.drawable.ic_plugin, Tab.PLUGINS)
+    addTab(I18n.t(this, "设置", "Settings"), R.drawable.ic_settings, Tab.SETTINGS)
     wrapper.addView(inner)
     return wrapper
   }
@@ -1163,9 +1475,9 @@ class MainActivity : ComponentActivity() {
       rail.addView(buildNavItem(label, iconRes, tab),
         LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
     }
-    addTab("终端", R.drawable.ic_terminal, Tab.TERMINAL)
-    addTab("插件", R.drawable.ic_plugin, Tab.PLUGINS)
-    addTab("设置", R.drawable.ic_settings, Tab.SETTINGS)
+    addTab(I18n.t(this, "终端", "Terminal"), R.drawable.ic_terminal, Tab.TERMINAL)
+    addTab(I18n.t(this, "插件", "Plugins"), R.drawable.ic_plugin, Tab.PLUGINS)
+    addTab(I18n.t(this, "设置", "Settings"), R.drawable.ic_settings, Tab.SETTINGS)
     return rail
   }
 
@@ -1275,16 +1587,19 @@ class MainActivity : ComponentActivity() {
     }
   }
 
-  /** 桥协议 downloadDebugLogs：打包 engine.log/bootstrap.log/env 到公共导出仓库 exports/。 */
+  /** 桥协议 downloadDebugLogs / 设置页「导出调试日志」：打包全部日志（filesDir/logs/）为 zip，
+   *  经 FileProvider 调起系统分享；不再依赖公共存储权限。 */
   private fun exportDebugLogs() {
     Thread {
       try {
-        val dir = File(engineManager.dshDataDir, "exports").apply { mkdirs() }
-        val zip = File(dir, "dsh-debug-" + System.currentTimeMillis() + ".zip")
+        val zip = File(Logs.dir(this), "dsh-debug-" + System.currentTimeMillis() + ".zip")
         java.util.zip.ZipOutputStream(zip.outputStream()).use { zos ->
           for ((f, name) in listOf(
-            File(filesDir, "engine.log") to "engine.log",
-            File(filesDir, "bootstrap.log") to "bootstrap.log",
+            Logs.engineLog(this) to "engine.log",
+            Logs.bootstrapLog(this) to "bootstrap.log",
+            Logs.terminalLog(this) to "terminal.log",
+            Logs.terminalDetailLog(this) to "terminal-detail.log",
+            Logs.exceptionsLog(this) to "exceptions.log",
           )) {
             if (!f.exists()) continue
             zos.putNextEntry(java.util.zip.ZipEntry(name))
@@ -1298,9 +1613,19 @@ class MainActivity : ComponentActivity() {
           )
           zos.closeEntry()
         }
-        runOnUiThread { terminalScreen.terminal().appendLine("调试日志已导出: " + zip.absolutePath) }
+        runOnUiThread {
+          shareFile(zip, "application/zip")
+          terminalScreen.terminal().appendLine(
+            I18n.t(this, "调试日志已打包：", "Debug logs packed: ") + zip.absolutePath,
+          )
+        }
       } catch (t: Throwable) {
-        runOnUiThread { terminalScreen.terminal().appendLine("导出调试日志失败: " + (t.message ?: t.javaClass.simpleName)) }
+        Logs.logE(this, "export", "导出调试日志失败", t)
+        runOnUiThread {
+          terminalScreen.terminal().appendLine(
+            I18n.t(this, "导出调试日志失败：", "Export debug logs failed: ") + (t.message ?: t.javaClass.simpleName),
+          )
+        }
       }
     }.start()
   }
