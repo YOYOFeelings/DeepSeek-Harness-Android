@@ -39,6 +39,12 @@ class UpdateManager(private val context: Context) {
   /** 发布清单 URL（GitHub Releases 的 latest/download/MANIFEST.txt）。 */
   var manifestUrl: String = DEFAULT_MANIFEST_URL
 
+  /** 备用发布清单 URL（latest 发布未附带 MANIFEST.txt 时的回退地址）。 */
+  var manifestFallbackUrl: String = DEFAULT_MANIFEST_FALLBACK_URL
+
+  /** 本次更新实际取到清单所用的 URL（下载基址随它走）。 */
+  private var usedManifestUrl: String = DEFAULT_MANIFEST_URL
+
   /** 当前激活更新源（null = 未显式选择 → 更新时自动测速选最快源；UI/引导流程可显式赋值）。 */
   var activeMirror: Mirror? = null
 
@@ -185,17 +191,29 @@ class UpdateManager(private val context: Context) {
         onStage("检查", "检查更新…")
         var manifestBody: String? = null
         var bodyMirror: Mirror = mirrors.first()
-        for (m in mirrors) {
-          try {
-            manifestBody = fetchText(m.resolve(manifestUrl), m, readTimeoutMs = 20_000)
-            bodyMirror = m
-            break
-          } catch (_: Throwable) {
-            onStage("检查", "更新源 " + m.name + " 不可达，尝试下一个…")
+        var anyReachable = false
+        outer@ for (m in mirrors) {
+          for (url in candidateManifestUrls()) {
+            try {
+              manifestBody = fetchText(m.resolve(url), m, readTimeoutMs = 20_000)
+              bodyMirror = m
+              usedManifestUrl = url
+              break@outer
+            } catch (t: Throwable) {
+              if (isNetworkError(t)) {
+                onStage("检查", "更新源 " + m.name + " 不可达，尝试下一个…")
+              } else {
+                anyReachable = true
+                onStage("检查", "更新源 " + m.name + " 无可用清单，尝试下一个…")
+              }
+            }
           }
         }
         if (manifestBody.isNullOrBlank()) {
-          throw IllegalStateException("所有更新源均不可达，请检查网络或更换更新源")
+          throw IllegalStateException(
+            if (anyReachable) "最新发布未附带 MANIFEST.txt（备用清单地址也不可用），请稍后再试或检查更新源"
+            else "所有更新源均不可达，请检查网络或更换更新源"
+          )
         }
         onStage("检查", "解析发布清单…")
         val (sha, filename, size) = findSnapshot(manifestBody)
@@ -299,6 +317,13 @@ class UpdateManager(private val context: Context) {
     }.start()
   }
 
+  /** 清单候选 URL：主地址优先，备用地址回退（去重）。 */
+  private fun candidateManifestUrls(): List<String> =
+    listOfNotNull(manifestUrl, manifestFallbackUrl).distinct()
+
+  /** 网络层失败（超时/连不上/域名解析失败）→ 更新源不可达；其余（HTTP 错误码/HTML 垃圾页）→ 源可达但无清单。 */
+  private fun isNetworkError(t: Throwable): Boolean = t is java.io.IOException
+
   /** 候选源顺序：当前激活源优先，其余按内置+自定义顺序（用于自动回退）。 */
   private fun candidateMirrors(): List<Mirror> {
     val all = allMirrors()
@@ -322,9 +347,9 @@ class UpdateManager(private val context: Context) {
     return null
   }
 
-  /** manifest 同目录（release download 目录）作为快照下载基址，保留镜像前缀。 */
+  /** 实际取到清单所用 URL 的同目录（release download 目录）作为快照下载基址，保留镜像前缀。 */
   private fun downloadBase(m: Mirror): String {
-    val base = m.resolve(manifestUrl)
+    val base = m.resolve(usedManifestUrl)
     return base.substringBeforeLast('/') + "/"
   }
 
@@ -459,6 +484,10 @@ class UpdateManager(private val context: Context) {
     /** 生产默认：GitHub Releases 的 MANIFEST.txt（官方发布清单）。 */
     const val DEFAULT_MANIFEST_URL =
       "https://github.com/YOYOFeelings/DeepSeek-Harness-Android/releases/latest/download/MANIFEST.txt"
+
+    /** 备用清单地址：latest 发布未附带 MANIFEST.txt 时回退到带清单的历史发布。 */
+    const val DEFAULT_MANIFEST_FALLBACK_URL =
+      "https://github.com/YOYOFeelings/DeepSeek-Harness-Android/releases/download/v0.10.8-yoyo/MANIFEST.txt"
 
     /** 默认激活更新源 id（持久化配置缺省时使用 akaere）。 */
     const val DEFAULT_MIRROR_ID = "akaere"
