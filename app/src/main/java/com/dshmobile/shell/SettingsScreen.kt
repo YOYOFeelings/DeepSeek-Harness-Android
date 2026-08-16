@@ -16,6 +16,7 @@ import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.SeekBar
 import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
@@ -46,6 +47,8 @@ class SettingsScreen(context: Context, private val callbacks: Callbacks) : Linea
     fun onLanguageChanged()       // 语言切换后重建页面
     fun onPickBackgroundImage()   // 从相册选择一张图片作为应用背景
     fun onApplyBackground()       // 按已保存的背景设置重新应用根背景
+    fun onDownloadBackground(url: String)   // 下载 URL 图片并应用为背景
+    fun onRandomBackground()                // 随机获取一张图片并应用为背景
   }
 
   private val prefs = context.getSharedPreferences("dsh_shell", Context.MODE_PRIVATE)
@@ -643,9 +646,45 @@ class SettingsScreen(context: Context, private val callbacks: Callbacks) : Linea
       body.addView(row)
     }
 
+    // 渐变背景（两列一行，点击即应用）
+    body.addView(sectionLabel(I18n.t(context, "渐变背景", "Gradient background")), LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
+      topMargin = dp(10)
+    })
+    val gradientPresets = listOf(
+      "#4A6FA5|#7FB3D5|0",   // 蓝色 / blue
+      "#5B8C5A|#BFE3B4|90",  // 绿色 / green
+      "#E0A458|#F7E6C4|0",   // 落日 / sunset
+      "#9A6FB0|#E5C6F0|45",  // 紫色 / purple
+      "#2C3E50|#4A6FA5|90",  // 午夜 / midnight
+      "#E56B6B|#FFE3C2|45",  // 暖色 / warm
+    )
+    for (i in gradientPresets.indices step 2) {
+      val row = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) }
+      }
+      fun addGradientSwatch(idx: Int) {
+        val encoded = gradientPresets[idx]
+        val active = bgType == "gradient" && bgValue == encoded
+        val sw = gradientSwatch(encoded, active) {
+          prefs.edit()
+            .putString("settings_bg_type", "gradient")
+            .putString("settings_bg_value", encoded)
+            .apply()
+          callbacks.onApplyBackground()
+          openAppearance()
+        }
+        row.addView(sw, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply { if (idx % 2 == 0) marginEnd = dp(8) })
+      }
+      addGradientSwatch(i)
+      if (i + 1 < gradientPresets.size) addGradientSwatch(i + 1)
+      body.addView(row)
+    }
+
     // 当前背景说明
     val desc = when {
       bgType == "image" -> I18n.t(context, "当前：自定义图片背景", "Current: custom image background")
+      bgType == "gradient" -> I18n.t(context, "当前：渐变背景", "Current: gradient background")
       bgType == "color" && bgValue.isNotEmpty() -> I18n.t(context, "当前：预设颜色 " + bgValue, "Current: preset color " + bgValue)
       else -> I18n.t(context, "当前：默认背景", "Current: default background")
     }
@@ -658,9 +697,94 @@ class SettingsScreen(context: Context, private val callbacks: Callbacks) : Linea
       LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(4) },
     )
 
+    // 背景明暗度（遮罩叠加，仅对图片/渐变生效）
+    body.addView(sectionLabel(I18n.t(context, "背景明暗度", "Background dim")), LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
+      topMargin = dp(10)
+    })
+    val dimRow = LinearLayout(context).apply {
+      orientation = LinearLayout.HORIZONTAL
+      gravity = Gravity.CENTER_VERTICAL
+      layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(2) }
+    }
+    dimRow.addView(
+      TextView(context).apply {
+        text = I18n.t(context, "明暗度（遮罩）", "Dim level (overlay)")
+        textSize = 12f
+        setTextColor(resources.getColor(R.color.text_secondary, null))
+        layoutParams = LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
+      },
+    )
+    val dimValue = TextView(context).apply {
+      textSize = 12f
+      typeface = Typeface.DEFAULT_BOLD
+      setTextColor(resources.getColor(R.color.text, null))
+    }
+    dimRow.addView(dimValue)
+    body.addView(dimRow)
+    val dim = prefs.getInt("settings_bg_dim", 20).coerceIn(0, 80)
+    dimValue.text = I18n.t(context, "明暗度: ", "Dim: ") + dim
+    val dimSeek = SeekBar(context).apply {
+      max = 80
+      progress = dim
+      layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
+    }
+    dimSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+      override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+        if (!fromUser) return
+        prefs.edit().putInt("settings_bg_dim", progress).apply()
+        dimValue.text = I18n.t(context, "明暗度: ", "Dim: ") + progress
+      }
+      override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+      override fun onStopTrackingTouch(seekBar: SeekBar?) {
+        callbacks.onApplyBackground()
+      }
+    })
+    body.addView(dimSeek)
+
+    // 模糊图片背景（仅对图片背景生效，缩小再放大）
+    body.addView(switchRow(
+      I18n.t(context, "模糊图片背景", "Blur image background"),
+      I18n.t(context, "图片背景启用模糊（缩小再放大）", "Blur the image background (shrink then upscale)"),
+      "settings_bg_blur", false,
+    ) { callbacks.onApplyBackground() })
+
     body.addView(
       flatButton(I18n.t(context, "选择图片作为背景", "Choose image as background"), accent = true) { callbacks.onPickBackgroundImage() },
       LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) },
+    )
+
+    // 图片链接：输入 URL 下载并应用为背景
+    body.addView(sectionLabel(I18n.t(context, "图片链接", "Image URL")), LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
+      topMargin = dp(12)
+    })
+    val urlRow = LinearLayout(context).apply {
+      orientation = LinearLayout.HORIZONTAL
+      gravity = Gravity.CENTER_VERTICAL
+      layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(2) }
+    }
+    val urlInput = EditText(context).apply {
+      hint = "https://…/photo.jpg"
+      textSize = 12f
+      setSingleLine(true)
+      layoutParams = LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
+    }
+    urlRow.addView(urlInput)
+    urlRow.addView(
+      flatButton(I18n.t(context, "下载并应用为背景", "Download & apply"), accent = true) {
+        val url = urlInput.text?.toString()?.trim().orEmpty()
+        if (url.startsWith("http://") || url.startsWith("https://")) {
+          callbacks.onDownloadBackground(url)
+        } else {
+          showToast(I18n.t(context, "链接需以 http:// 或 https:// 开头", "URL must start with http:// or https://"))
+        }
+      },
+      LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply { marginStart = dp(8) },
+    )
+    body.addView(urlRow)
+
+    body.addView(
+      flatButton(I18n.t(context, "随机获取图片", "Random image"), accent = false) { callbacks.onRandomBackground() },
+      LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) },
     )
     body.addView(
       flatButton(I18n.t(context, "恢复默认", "Reset default"), accent = false) {
@@ -707,6 +831,59 @@ class SettingsScreen(context: Context, private val callbacks: Callbacks) : Linea
       )
       setOnClickListener { onClick() }
     }
+
+  /** 预设渐变背景色块：圆形渐变（两色 + 角度）+ 下方色值/「当前」标注，点击应用。encoded 形如 "START_HEX|END_HEX|ANGLE_DEG"。 */
+  private fun gradientSwatch(encoded: String, active: Boolean, onClick: () -> Unit): LinearLayout =
+    LinearLayout(context).apply {
+      orientation = LinearLayout.VERTICAL
+      gravity = Gravity.CENTER_HORIZONTAL
+      setPadding(0, dp(4), 0, dp(4))
+      isClickable = true
+      isFocusable = true
+      val accent = resources.getColor(R.color.accent, null)
+      val parts = encoded.split("|")
+      val label = if (parts.size >= 2) parts[0] + " " + parts[1] else encoded
+      addView(
+        View(context).apply {
+          background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            if (parts.size >= 2) {
+              orientation = gradientOrientation(parts.getOrNull(2)?.toIntOrNull() ?: 0)
+              setColors(intArrayOf(Color.parseColor(parts[0]), Color.parseColor(parts[1])))
+            } else {
+              setColor(Color.parseColor(parts[0]))
+            }
+            setStroke(
+              if (active) dp(3) else dp(1),
+              if (active) accent else resources.getColor(R.color.border, null),
+            )
+          }
+          layoutParams = LayoutParams(dp(44), dp(44))
+        },
+      )
+      addView(
+        TextView(context).apply {
+          text = if (active) I18n.t(context, "当前", "Current") else label
+          textSize = 9f
+          gravity = Gravity.CENTER_HORIZONTAL
+          setSingleLine(true)
+          setTextColor(if (active) accent else resources.getColor(R.color.text_tertiary, null))
+          setPadding(0, dp(4), 0, 0)
+          layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
+        },
+      )
+      setOnClickListener { onClick() }
+    }
+
+  /** 渐变角度（度）→ GradientDrawable.Orientation（预设角度 0/45/90/135/180，其余取最近）。 */
+  private fun gradientOrientation(angle: Int): GradientDrawable.Orientation = when (angle) {
+    0 -> GradientDrawable.Orientation.LEFT_RIGHT
+    45 -> GradientDrawable.Orientation.TL_BR
+    90 -> GradientDrawable.Orientation.TOP_BOTTOM
+    135 -> GradientDrawable.Orientation.BL_TR
+    180 -> GradientDrawable.Orientation.RIGHT_LEFT
+    else -> GradientDrawable.Orientation.LEFT_RIGHT
+  }
 
   // ============ 操作逻辑 ============
 

@@ -11,9 +11,16 @@ import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Rect
 import android.graphics.Typeface
 import android.graphics.drawable.BitmapDrawable
+import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.Drawable
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.LayerDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -30,7 +37,10 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.lifecycleScope
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.launch
 
@@ -293,6 +303,8 @@ class MainActivity : ComponentActivity() {
       override fun onLanguageChanged() = rebuildUiLanguage()
       override fun onPickBackgroundImage() { backgroundImagePicker.launch("image/*") }
       override fun onApplyBackground() = applyBackground()
+      override fun onDownloadBackground(url: String) = downloadBackground(url)
+      override fun onRandomBackground() = randomBackground()
     })
     contentFrame.addView(constrained(settingsScreen), centeredParams())
     settingsScreen.visibility = View.GONE
@@ -317,7 +329,7 @@ class MainActivity : ComponentActivity() {
     ))
     setContentView(rootFrame)
     applyBackground()
-    refreshNavHighlight(Tab.HOME)
+    showTab(Tab.HOME)
     applyNavLayout()
     // 系统返回键：Web 覆盖层先关闭（并复位 webActive）；设置页内页先回退内页；否则走默认返回。
     onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
@@ -413,26 +425,46 @@ class MainActivity : ComponentActivity() {
     }
   }
 
-  /** 按已保存的背景设置应用应用根背景：图片 → BitmapDrawable（按屏幕尺寸缩放，失败回退默认色）；颜色 → setBackgroundColor；默认 → 背景色。 */
+  /** 按已保存的背景设置应用应用根背景：
+   *   图片 → BitmapDrawable（按屏幕尺寸缩放，可选模糊，失败回退默认色）；
+   *   渐变 → GradientDrawable（两色 + 角度）；颜色 → ColorDrawable；默认 → 背景色。
+   *   图片/渐变可叠加明暗遮罩（settings_bg_dim，0..80 → 黑色 alpha 0..~204）。 */
   private fun applyBackground() {
     if (!::rootFrame.isInitialized) return
     val type = prefs.getString("settings_bg_type", "").orEmpty()
     val value = prefs.getString("settings_bg_value", "").orEmpty()
+    val dim = prefs.getInt("settings_bg_dim", 20).coerceIn(0, 80)
+    val blur = prefs.getBoolean("settings_bg_blur", false)
     try {
+      var base: Drawable? = null
       when (type) {
         "image" -> {
           val file = File(value)
           if (file.exists()) {
-            val bmp = decodeScaledBackground(file.absolutePath)
-            if (bmp != null) {
-              rootFrame.background = BitmapDrawable(resources, bmp)
-              return
+            val bmp = decodeBackgroundBitmap(file.absolutePath, blur)
+            if (bmp != null) base = BitmapDrawable(resources, bmp)
+          }
+        }
+        "gradient" -> {
+          val parts = value.split("|")
+          if (parts.size >= 3) {
+            val start = parts[0].trim()
+            val end = parts[1].trim()
+            val angle = parts[2].trim().toIntOrNull() ?: 0
+            base = GradientDrawable().apply {
+              orientation = orientationForAngle(angle)
+              setColors(intArrayOf(Color.parseColor(start), Color.parseColor(end)))
             }
           }
-          rootFrame.setBackgroundColor(resources.getColor(R.color.bg, null))
         }
-        "color" -> rootFrame.setBackgroundColor(Color.parseColor(value))
-        else -> rootFrame.setBackgroundColor(resources.getColor(R.color.bg, null))
+        "color" -> if (value.isNotEmpty()) base = ColorDrawable(Color.parseColor(value))
+      }
+      val withOverlay = base != null && (type == "image" || type == "gradient") && dim > 0
+      rootFrame.background = if (withOverlay) {
+        val alpha = (dim * 255 / 100).coerceIn(0, 255)
+        LayerDrawable(arrayOf(base, ColorDrawable(Color.argb(alpha, 0, 0, 0))))
+      } else {
+        base ?: ColorDrawable(resources.getColor(R.color.bg, null))
       }
     } catch (_: Throwable) {
       runCatching { rootFrame.setBackgroundColor(resources.getColor(R.color.bg, null)) }
@@ -451,6 +483,145 @@ class MainActivity : ComponentActivity() {
     }
     val opts = BitmapFactory.Options().apply { inSampleSize = sample }
     return BitmapFactory.decodeFile(path, opts)
+  }
+
+  /** 解码背景图：blur=false 直接按屏幕尺寸缩放解码；blur=true 先缩小到 ~120px 再放大回屏幕尺寸（廉价柔化模糊）。
+   *  仅解码本身失败才返回 null（模糊路径失败回退到普通缩放解码）。 */
+  private fun decodeBackgroundBitmap(path: String, blur: Boolean): Bitmap? {
+    if (!blur) return decodeScaledBackground(path)
+    return try {
+      val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+      BitmapFactory.decodeFile(path, bounds)
+      if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+      val smallMax = 120
+      var sample = 1
+      while (bounds.outWidth / (sample * 2) > smallMax || bounds.outHeight / (sample * 2) > smallMax) {
+        sample *= 2
+      }
+      val small = BitmapFactory.decodeFile(path, BitmapFactory.Options().apply { inSampleSize = sample })
+        ?: return decodeScaledBackground(path)
+      val w = resources.displayMetrics.widthPixels
+      val h = resources.displayMetrics.heightPixels
+      val target = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+      Canvas(target).drawBitmap(
+        small,
+        Rect(0, 0, small.width, small.height),
+        Rect(0, 0, w, h),
+        Paint(Paint.FILTER_BITMAP_FLAG),
+      )
+      target
+    } catch (_: Throwable) {
+      decodeScaledBackground(path)
+    }
+  }
+
+  /** 角度（度）→ GradientDrawable.Orientation：0/45/90/135/180 映射到指定方向，其余取最近。 */
+  private fun orientationForAngle(angle: Int): GradientDrawable.Orientation = when {
+    angle <= 22 -> GradientDrawable.Orientation.LEFT_RIGHT
+    angle <= 67 -> GradientDrawable.Orientation.TL_BR
+    angle <= 112 -> GradientDrawable.Orientation.TOP_BOTTOM
+    angle <= 157 -> GradientDrawable.Orientation.BL_TR
+    angle <= 180 -> GradientDrawable.Orientation.RIGHT_LEFT
+    else -> GradientDrawable.Orientation.LEFT_RIGHT
+  }
+
+  /** 后台下载 URL 图片到本地文件（≤25MB，成功写 filesDir/background.png，写入失败回退 cacheDir）。
+   *  返回已保存文件或 null；必须在后台线程调用。 */
+  private fun performDownloadBackground(url: String): File? {
+    var conn: HttpURLConnection? = null
+    try {
+      conn = URL(url).openConnection() as HttpURLConnection
+      conn.connectTimeout = 15000
+      conn.readTimeout = 30000
+      conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android) dsh-mobile")
+      conn.instanceFollowRedirects = true
+      if (conn.responseCode != 200) return null
+      val input = conn.inputStream ?: return null
+      val buffer = ByteArrayOutputStream()
+      val chunk = ByteArray(8192)
+      var total = 0L
+      while (true) {
+        val n = input.read(chunk)
+        if (n < 0) break
+        total += n
+        if (total > 25 * 1024 * 1024) return null // 超 25MB 放弃
+        buffer.write(chunk, 0, n)
+      }
+      val data = buffer.toByteArray()
+      if (data.isEmpty()) return null
+      try {
+        val f = File(filesDir, "background.png")
+        f.writeBytes(data)
+        return f
+      } catch (_: Throwable) {
+        try {
+          val f = File(cacheDir, "background.png")
+          f.writeBytes(data)
+          return f
+        } catch (_: Throwable) {
+          return null
+        }
+      }
+    } catch (_: Throwable) {
+      return null
+    } finally {
+      try { conn?.disconnect() } catch (_: Throwable) {}
+    }
+  }
+
+  /** 下载 URL 图片并应用为背景（后台下载 → UI 线程持久化 + 应用 + 提示）。 */
+  private fun downloadBackground(url: String) {
+    if (!url.startsWith("http://") && !url.startsWith("https://")) {
+      Toast.makeText(this, "链接需以 http:// 或 https:// 开头", Toast.LENGTH_SHORT).show()
+      return
+    }
+    Thread {
+      val file = performDownloadBackground(url)
+      runOnUiThread {
+        if (file != null) {
+          prefs.edit()
+            .putString("settings_bg_type", "image")
+            .putString("settings_bg_value", file.absolutePath)
+            .apply()
+          applyBackground()
+          if (::settingsScreen.isInitialized) settingsScreen.refreshAppearance()
+          Toast.makeText(this, "背景图片已更新", Toast.LENGTH_SHORT).show()
+        } else {
+          Toast.makeText(this, "下载失败", Toast.LENGTH_SHORT).show()
+        }
+      }
+    }.start()
+  }
+
+  /** 随机获取图片并应用为背景：后台依次尝试候选图源，首个成功即应用；全部失败提示。 */
+  private fun randomBackground() {
+    val candidates = listOf(
+      "https://picsum.photos/1080/1920",
+      "https://picsum.photos/1920/1080",
+      "https://loremflickr.com/1080/1920",
+      "https://loremflickr.com/1920/1080",
+    )
+    Thread {
+      var saved: File? = null
+      for (c in candidates) {
+        val f = performDownloadBackground(c)
+        if (f != null) { saved = f; break }
+      }
+      val file = saved
+      runOnUiThread {
+        if (file != null) {
+          prefs.edit()
+            .putString("settings_bg_type", "image")
+            .putString("settings_bg_value", file.absolutePath)
+            .apply()
+          applyBackground()
+          if (::settingsScreen.isInitialized) settingsScreen.refreshAppearance()
+          Toast.makeText(this, "背景图片已更新", Toast.LENGTH_SHORT).show()
+        } else {
+          Toast.makeText(this, "随机图片获取失败", Toast.LENGTH_SHORT).show()
+        }
+      }
+    }.start()
   }
 
   /** 启动流程只触发一次（APK 检查/非强制更新弹框关闭后均可能调用）。 */

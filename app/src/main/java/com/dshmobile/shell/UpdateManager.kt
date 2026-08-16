@@ -94,13 +94,57 @@ class UpdateManager(private val context: Context) {
   fun resolveForDownload(url: String, mirror: Mirror? = null): String =
     (mirror ?: activeMirror)?.resolve(url) ?: url
 
-  /** 实测某源拉取 manifest 的延迟；不可用（含返回 HTML/垃圾内容）返回 null。 */
-  private fun measureMirror(m: Mirror): Long? = try {
+  /** 实测某源可达性的延迟（轻量连通性探测，不校验内容）；不可达返回 null。 */
+  private fun measureMirror(m: Mirror): Long? = probeMirror(m)
+
+  /**
+   * 轻量连通性探测：测镜像根（官方直连测 manifest）的可达性并返回延迟（毫秒）。
+   * 与真实下载不同，这里只看能否建立 HTTP 连接、返回任意 200..599 响应即视为可用，
+   * 避免因 GitHub release 重定向路径对 manifest URL 返回非 200/HTML 而误判可用源。
+   */
+  private fun probeMirror(m: Mirror): Long? {
+    val probeUrl = if (m.prefix.isNotEmpty()) m.prefix else manifestUrl
     val start = System.currentTimeMillis()
-    val body = fetchText(m.resolve(manifestUrl), m, readTimeoutMs = 6000)
-    if (body.isBlank() || looksLikeHtml(body)) null else System.currentTimeMillis() - start
-  } catch (_: Throwable) {
-    null
+    try {
+      // 首选 HEAD：仅需响应头，开销最小。
+      val headCode = try {
+        val conn = probeRaw(probeUrl)
+        try {
+          conn.requestMethod = "HEAD"
+          conn.responseCode
+        } finally {
+          conn.disconnect()
+        }
+      } catch (_: Throwable) {
+        -1
+      }
+      if (headCode in 200..599 && headCode != 405 && headCode != 501) {
+        return System.currentTimeMillis() - start
+      }
+      // HEAD 不被支持（405/501）或读取响应码抛异常 → 换新连接短 GET 兜底（不读 body）。
+      val getConn = probeRaw(probeUrl)
+      try {
+        getConn.requestMethod = "GET"
+        val code = getConn.responseCode
+        if (code in 200..599) return System.currentTimeMillis() - start
+      } finally {
+        getConn.disconnect()
+      }
+      return null
+    } catch (_: Throwable) {
+      return null
+    }
+  }
+
+  /** 探测用 HTTP 连接：短超时、不自动跟随重定向，与真实下载的 [openRaw] 相互独立。 */
+  private fun probeRaw(url: String): HttpURLConnection {
+    val conn = URL(url).openConnection() as HttpURLConnection
+    conn.instanceFollowRedirects = false
+    conn.connectTimeout = 5000
+    conn.readTimeout = 3000
+    conn.setRequestProperty("User-Agent", UA)
+    conn.setRequestProperty("Accept", "*/*")
+    return conn
   }
 
   /**
