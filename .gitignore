@@ -12,3 +12,7 @@ token*
 *.pem
 *.p12
 .kotlin/
+# 项目文档（含本机信息/密钥，不入公开仓库）
+PROJECT_STRUCTURE.md
+USER_HABITS.md
+PITFALLS.md

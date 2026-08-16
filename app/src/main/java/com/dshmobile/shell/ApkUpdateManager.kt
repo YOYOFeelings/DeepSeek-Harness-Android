@@ -158,9 +158,10 @@ class ApkUpdateManager(private val context: Context) {
   fun canInstall(): Boolean =
     Build.VERSION.SDK_INT < 26 || context.packageManager.canRequestPackageInstalls()
 
-  /** 更新弹窗。forced=true 不可取消；非强制可「稍后提醒」。
-   *  onDownload：用户点击立即更新（传入下载 URL）；onOpenInstallSettings：跳转安装权限设置页；
-   *  onDismissed：非强制模式下弹窗以任何方式关闭后回调（用于恢复被暂停的启动流程）。 */
+  /** 更新弹窗（统一美化，全部可关闭）。forced=true 时提供「退出应用」出口避免死锁；
+   *  非强制可「稍后提醒」。onDownload：用户点击立即更新（传入下载 URL）；
+   *  onOpenInstallSettings：跳转安装权限设置页；onDismissed：非强制模式下弹窗被关闭后回调
+   *  （用于恢复被暂停的启动流程；返回键/点外部/稍后提醒均会触发，立即更新不触发）。 */
   fun showUpdateDialog(
     info: UpdateInfo,
     forced: Boolean,
@@ -168,27 +169,40 @@ class ApkUpdateManager(private val context: Context) {
     onOpenInstallSettings: () -> Unit,
     onDismissed: (() -> Unit)? = null,
   ) {
-    val builder = AlertDialog.Builder(context)
-      .setTitle(I18n.t(context, "发现新版本 v", "New version v") + info.version)
-      .setMessage(if (info.notes.isBlank())
-        I18n.t(context, "请更新到最新版本体验新功能。", "Please update to the latest version to enjoy new features.")
-      else info.notes)
-      .setPositiveButton(I18n.t(context, "立即更新", "Update now")) { _, _ ->
+    val notes = if (info.notes.isBlank())
+      I18n.t(context, "请更新到最新版本体验新功能。", "Please update to the latest version to enjoy new features.")
+    else info.notes
+    val actions = mutableListOf(
+      DialogUi.Action(I18n.t(context, "立即更新", "Update now"), accent = true) {
         if (!canInstall()) {
           onOpenInstallSettings()
         } else {
           onDownload(info.downloadUrl)
         }
-      }
+      },
+    )
     if (forced) {
-      builder.setCancelable(false)
+      actions.add(
+        DialogUi.Action(I18n.t(context, "退出应用", "Exit app")) {
+          try { (context as? android.app.Activity)?.finishAffinity() } catch (_: Throwable) {}
+        },
+      )
     } else {
-      builder.setCancelable(true)
-      builder.setNegativeButton(I18n.t(context, "稍后提醒", "Remind me later")) { d, _ -> d.dismiss() }
+      actions.add(
+        DialogUi.Action(I18n.t(context, "稍后提醒", "Remind me later")) {
+          onDismissed?.invoke()
+        },
+      )
     }
-    val dialog = builder.create()
-    dialog.setOnDismissListener { if (!forced) onDismissed?.invoke() }
-    dialog.show()
+    DialogUi.show(
+      context,
+      title = I18n.t(context, "发现新版本 v", "New version v") + info.version,
+      message = notes,
+      iconRes = R.drawable.ic_update,
+      actions = actions,
+      cancelable = true,
+      onCancel = { if (!forced) onDismissed?.invoke() },
+    )
   }
 
   /** 使用系统 DownloadManager 下载 APK 到外部缓存目录，通知栏显示进度；返回 downloadId。 */

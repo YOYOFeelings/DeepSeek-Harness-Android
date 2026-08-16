@@ -5,14 +5,15 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * 公告拉取：从 GitHub 仓库固定 raw 地址读取 ANNOUNCEMENT.md（经当前更新源
- * 镜像解析加速），缓存最近一次内容。失败时回退缓存；无缓存则返回 null
+ * 公告拉取：从 GitHub 仓库固定 raw 地址读取 NOTICE.md（独立公告配置，
+ * 与更新说明 ANNOUNCEMENT.md 相互独立；经当前更新源镜像解析加速），
+ * 缓存最近一次内容。失败时回退缓存；无缓存则返回 null
  * （界面隐藏公告卡，不阻断任何流程）。
  */
 object AnnouncementManager {
 
   const val URL =
-    "https://raw.githubusercontent.com/YOYOFeelings/DeepSeek-Harness-Android/main/ANNOUNCEMENT.md"
+    "https://raw.githubusercontent.com/YOYOFeelings/DeepSeek-Harness-Android/main/NOTICE.md"
 
   private const val PREFS = "dsh_shell"
   private const val KEY_CACHE = "announcement_cache"

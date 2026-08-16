@@ -291,17 +291,21 @@ class PluginsScreen(context: Context, private val callbacks: Callbacks) : Linear
 
   /** 卸载确认对话框 → 删除插件目录。 */
   private fun confirmUninstall(name: String, dir: File) {
-    android.app.AlertDialog.Builder(context)
-      .setTitle(I18n.t(context, "卸载插件", "Uninstall plugin"))
-      .setMessage(I18n.t(context, "确定卸载 $name 吗？将删除其目录，重启引擎后不再加载。", "Uninstall $name? Its directory will be deleted and it won't load after an engine restart."))
-      .setPositiveButton(I18n.t(context, "卸载", "Uninstall")) { _, _ ->
-        dir.deleteRecursively()
-        val disabledDir = File(dir.parentFile, dir.name + ".disabled")
-        disabledDir.deleteRecursively()
-        refresh()
-      }
-      .setNegativeButton(I18n.t(context, "取消", "Cancel"), null)
-      .show()
+    DialogUi.show(
+      context = context,
+      title = I18n.t(context, "卸载插件", "Uninstall plugin"),
+      message = I18n.t(context, "确定卸载 $name 吗？将删除其目录，重启引擎后不再加载。", "Uninstall $name? Its directory will be deleted and it won't load after an engine restart."),
+      iconRes = R.drawable.ic_delete,
+      actions = listOf(
+        DialogUi.Action(I18n.t(context, "卸载", "Uninstall"), accent = true) {
+          dir.deleteRecursively()
+          val disabledDir = File(dir.parentFile, dir.name + ".disabled")
+          disabledDir.deleteRecursively()
+          refresh()
+        },
+        DialogUi.Action(I18n.t(context, "取消", "Cancel")),
+      ),
+    )
   }
 
   /** 停用/启用：目录改名为 name.disabled ↔ name（Node 不再解析即停用）。 */

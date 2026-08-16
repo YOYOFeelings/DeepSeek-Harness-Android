@@ -1,7 +1,6 @@
 package com.dshmobile.shell
 
 import android.Manifest
-import android.app.AlertDialog
 import android.app.DownloadManager
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -98,6 +97,7 @@ class MainActivity : ComponentActivity() {
   @Volatile private var pendingPickCallback: String? = null
 
   private lateinit var contentFrame: FrameLayout
+  private lateinit var homeScreen: HomeScreen
   private lateinit var terminalScreen: TerminalScreen
   private lateinit var pluginsScreen: PluginsScreen
   private lateinit var settingsScreen: SettingsScreen
@@ -120,10 +120,10 @@ class MainActivity : ComponentActivity() {
   /** engine.log 已流式输出到终端的字节数（跨流程复用，只输出新增行）。 */
   @Volatile private var engineLogRead = 0L
 
-  private enum class Tab { TERMINAL, PLUGINS, SETTINGS }
+  private enum class Tab { HOME, TERMINAL, PLUGINS, SETTINGS }
 
   /** 当前所在页签（系统返回键在设置页内页时先回退内页）。 */
-  private var currentTab = Tab.TERMINAL
+  private var currentTab = Tab.HOME
 
   /** 导航视图（item/icon/label），供底部导航与左侧导航共用高亮。 */
   private data class NavViews(val item: LinearLayout, val icon: ImageView, val label: TextView)
@@ -185,18 +185,29 @@ class MainActivity : ComponentActivity() {
     super.onCreate(savedInstanceState)
     val root = FrameLayout(this)
     contentFrame = FrameLayout(this)
+    homeScreen = HomeScreen(this, object : HomeScreen.Callbacks {
+      override fun onRestartEngine() = restartEngine()
+      override fun onOpenDirectory() = pickDirectory()
+      override fun onOpenWeb() = openWeb()
+      override fun onCheckUpdate() = runCheckUpdate()
+      override fun onInstallEnv() = runInstallEnv()
+      override fun onCheckApkUpdate() = checkApkUpdateManually()
+      override fun onClearCache() = clearCache()
+      override fun onReloadAnnouncement() = loadAnnouncement()
+    })
+    contentFrame.addView(constrained(homeScreen), centeredParams())
+    homeScreen.visibility = View.GONE
     terminalScreen = TerminalScreen(this, object : TerminalScreen.Callbacks {
       override fun onRestartEngine() = restartEngine()
       override fun onOpenDirectory() = pickDirectory()
       override fun onOpenWeb() = openWeb()
       override fun onCheckUpdate() = runCheckUpdate()
       override fun onInstallEnv() = runInstallEnv()
-      override fun onOpenPlugins() { showTab(Tab.PLUGINS) }
-      override fun onClearCache() = clearCache()
       override fun onCheckApkUpdate() = checkApkUpdateManually()
-      override fun onReloadAnnouncement() = loadAnnouncement()
+      override fun onClearCache() = clearCache()
     })
     contentFrame.addView(constrained(terminalScreen), centeredParams())
+    terminalScreen.visibility = View.GONE
     pluginsScreen = PluginsScreen(this, object : PluginsScreen.Callbacks {
       override fun onImportPlugin() = pluginPicker.launch(arrayOf("*/*"))
     })
@@ -251,7 +262,7 @@ class MainActivity : ComponentActivity() {
       dp(78), ViewGroup.LayoutParams.MATCH_PARENT, Gravity.LEFT,
     ))
     setContentView(root)
-    refreshNavHighlight(Tab.TERMINAL)
+    refreshNavHighlight(Tab.HOME)
     applyNavLayout()
     // 系统返回键：Web 覆盖层先关闭（并复位 webActive）；设置页内页先回退内页；否则走默认返回。
     onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
@@ -487,15 +498,21 @@ class MainActivity : ComponentActivity() {
     recreate()
   }
 
-  /** 拉取公告（主页公告卡）：结果回主线程更新 TerminalScreen 公告区。 */
+  /** 拉取公告（主页公告卡）：结果回主线程更新 HomeScreen 公告区。 */
   private fun loadAnnouncement() {
-    terminalScreen.setAnnouncementLoading(true)
+    homeScreen.setAnnouncementLoading(true)
     AnnouncementManager.load(this) { text ->
       runOnUiThread {
-        terminalScreen.setAnnouncementLoading(false)
-        terminalScreen.setAnnouncement(text)
+        homeScreen.setAnnouncementLoading(false)
+        homeScreen.setAnnouncement(text)
       }
     }
+  }
+
+  /** 同步引擎状态到主页状态卡与终端页。 */
+  private fun updateEngineStatus(running: Boolean, detail: String) {
+    if (::homeScreen.isInitialized) homeScreen.setEngineStatus(running, detail)
+    terminalScreen.setEngineStatus(running, detail)
   }
 
   /** 更新源测速弹窗：逐源实测延迟并实时刷新，完成后回调最快源（全失败回调 null）。
@@ -531,21 +548,34 @@ class MainActivity : ComponentActivity() {
       row.addView(latency)
       container.addView(row)
     }
-    val dialog = AlertDialog.Builder(this)
-      .setTitle(I18n.t(this, "检测各更新源速度…", "Testing update sources…"))
-      .setView(container)
-      .setCancelable(false)
-      .create()
-    dialog.show()
+    val completed = java.util.concurrent.atomic.AtomicBoolean(false)
+    val dialog = DialogUi.show(
+      this,
+      title = I18n.t(this, "检测各更新源速度…", "Testing update sources…"),
+      content = container,
+      iconRes = R.drawable.ic_speed,
+      actions = listOf(
+        DialogUi.Action(I18n.t(this, "取消", "Cancel"), accent = false) {
+          if (completed.compareAndSet(false, true)) onComplete(null)
+        },
+      ),
+      cancelable = true,
+      onCancel = { if (completed.compareAndSet(false, true)) onComplete(null) },
+    )
     Thread {
       val fastest = um.speedTestAll { m, ms ->
         val idx = sources.indexOfFirst { it.id == m.id }
         val text = if (ms != null) ms.toString() + " ms" else I18n.t(this, "不可用", "unavailable")
         runOnUiThread { if (idx in labels.indices) labels[idx].text = text }
       }
+      try {
+        Thread.sleep(500)
+      } catch (_: InterruptedException) {}
       runOnUiThread {
-        dialog.dismiss()
-        onComplete(fastest)
+        if (completed.compareAndSet(false, true)) {
+          dialog.dismiss()
+          onComplete(fastest)
+        }
       }
     }.start()
   }
@@ -565,13 +595,18 @@ class MainActivity : ComponentActivity() {
       append(if (tail.isBlank()) I18n.t(this@MainActivity, "（无日志输出）", "(no log output)") else tail)
     }
     runOnUiThread {
-      AlertDialog.Builder(this)
-        .setTitle(I18n.t(this, "引擎启动失败", "Engine failed to start"))
-        .setMessage(report)
-        .setCancelable(false)
-        .setPositiveButton(I18n.t(this, "下载错误报告", "Download report")) { _, _ -> exportEngineErrorReport(report) }
-        .setNegativeButton(I18n.t(this, "重试", "Retry")) { _, _ -> restartEngine() }
-        .show()
+      DialogUi.show(
+        this,
+        title = I18n.t(this, "引擎启动失败", "Engine failed to start"),
+        message = report,
+        iconRes = R.drawable.ic_shield,
+        actions = listOf(
+          DialogUi.Action(I18n.t(this, "下载错误报告", "Download report")) { exportEngineErrorReport(report) },
+          DialogUi.Action(I18n.t(this, "重试", "Retry"), accent = true) { restartEngine() },
+          DialogUi.Action(I18n.t(this, "关闭", "Close")) { /* 仅关闭 */ },
+        ),
+        cancelable = true,
+      )
     }
   }
 
@@ -615,16 +650,17 @@ class MainActivity : ComponentActivity() {
 
   /** 所有文件访问权限的说明对话框（非阻断）："去授权"跳系统设置，"稍后"关闭。 */
   private fun showAllFilesAccessExplainDialog() {
-    AlertDialog.Builder(this)
-      .setTitle(I18n.t(this, "需要文件访问权限", "File access required"))
-      .setMessage(I18n.t(this, "外部工作区需要「所有文件访问权限」，以便引擎（bash）能读写你选择的文件夹。", "The external workspace requires \"All files access\" so the engine (bash) can read/write your chosen folder."))
-      .setPositiveButton(I18n.t(this, "去授权", "Grant")) { _: android.content.DialogInterface?, _: Int ->
-        openAllFilesAccessSettings()
-      }
-      .setNegativeButton(I18n.t(this, "稍后", "Later")) { dialog: android.content.DialogInterface, _: Int ->
-        dialog.dismiss()
-      }
-      .show()
+    DialogUi.show(
+      this,
+      title = I18n.t(this, "需要文件访问权限", "File access required"),
+      message = I18n.t(this, "外部工作区需要「所有文件访问权限」，以便引擎（bash）能读写你选择的文件夹。", "The external workspace requires \"All files access\" so the engine (bash) can read/write your chosen folder."),
+      iconRes = R.drawable.ic_open,
+      actions = listOf(
+        DialogUi.Action(I18n.t(this, "去授权", "Grant"), accent = true) { openAllFilesAccessSettings() },
+        DialogUi.Action(I18n.t(this, "稍后", "Later")) { /* 仅关闭 */ },
+      ),
+      cancelable = true,
+    )
   }
 
   /** 进入终端主页并确保引擎运行。 */
@@ -635,16 +671,16 @@ class MainActivity : ComponentActivity() {
     }
     // 设置页「启动时自动启动引擎」关闭时，不自动拉起引擎（可在终端页手动重启）。
     if (!autoStartEngineEnabled()) {
-      terminalScreen.setEngineStatus(false, "")
+      updateEngineStatus(false, "")
       return
     }
     Thread {
       val running = EngineProbe.check().optBoolean("running", false)
       runOnUiThread {
         if (running) {
-          terminalScreen.setEngineStatus(true, "引擎已在运行")
+          updateEngineStatus(true, "引擎已在运行")
         } else {
-          terminalScreen.setEngineStatus(false, "")
+          updateEngineStatus(false, "")
           startEngineFlow()
         }
       }
@@ -681,7 +717,7 @@ class MainActivity : ComponentActivity() {
     if (!engineManager.startEngine(force = true)) {
       term.appendLine("引擎启动失败")
       appendEngineDiagnostics(term)
-      terminalScreen.setEngineStatus(false, "")
+      updateEngineStatus(false, "")
       if (showErrorDialog) showEngineFailureDialog("startEngine 返回 false")
       return false
     }
@@ -694,7 +730,7 @@ class MainActivity : ComponentActivity() {
     }
     drainEngineLog(term)
     if (!started && showErrorDialog) {
-      terminalScreen.setEngineStatus(false, "")
+      updateEngineStatus(false, "")
       showEngineFailureDialog("引擎启动超时（180 次探测未就绪）")
     }
     return started
@@ -773,7 +809,7 @@ class MainActivity : ComponentActivity() {
     runOnUiThread {
       prefs.edit().putBoolean("onboarded", true).apply()
       onboardingActive = false
-      terminalScreen.setEngineStatus(true, "")
+      updateEngineStatus(true, "")
       term.appendLine("安装完成，欢迎使用 dsh")
     }
   }
@@ -795,7 +831,7 @@ class MainActivity : ComponentActivity() {
     Thread {
       while (!done.get()) Thread.sleep(200)
       if (ok.get()) term.appendDetail("更新完成") else term.appendDetail("更新失败")
-      runOnUiThread { terminalScreen.refresh() }
+      runOnUiThread { homeScreen.refresh() }
     }.start()
   }
 
@@ -807,7 +843,7 @@ class MainActivity : ComponentActivity() {
       onLine = { line -> term.appendLine(line) },
       onDone = { ok, msg ->
         term.appendDetail(if (ok) "环境安装成功：" + msg else "环境安装失败：" + msg)
-        runOnUiThread { terminalScreen.refresh() }
+        runOnUiThread { homeScreen.refresh() }
       },
     )
   }
@@ -824,22 +860,26 @@ class MainActivity : ComponentActivity() {
     }
   }
 
-  /** 致命失败处理（主线程）：弹重试/跳过对话框。 */
+  /** 致命失败处理（主线程）：弹重试/跳过对话框（可返回键/点外部关闭）。 */
   private fun onBootstrapFatal(msg: String) {
     runOnUiThread {
-      AlertDialog.Builder(this)
-        .setTitle("安装未完成")
-        .setMessage(msg)
-        .setCancelable(false)
-        .setPositiveButton("重试") { _: android.content.DialogInterface?, _: Int ->
-          Thread { runBootstrapPipeline(terminalScreen.terminal()) }.start()
-        }
-        .setNegativeButton("稍后进入主页") { _: android.content.DialogInterface?, _: Int ->
-          prefs.edit().putBoolean("onboarded", true).apply()
-          onboardingActive = false
-          terminalScreen.setEngineStatus(false, "")
-        }
-        .show()
+      DialogUi.show(
+        this,
+        title = I18n.t(this, "安装未完成", "Installation incomplete"),
+        message = msg,
+        iconRes = R.drawable.ic_shield,
+        actions = listOf(
+          DialogUi.Action(I18n.t(this, "重试", "Retry"), accent = true) {
+            Thread { runBootstrapPipeline(terminalScreen.terminal()) }.start()
+          },
+          DialogUi.Action(I18n.t(this, "稍后进入主页", "Home later")) {
+            prefs.edit().putBoolean("onboarded", true).apply()
+            onboardingActive = false
+            updateEngineStatus(false, "")
+          },
+        ),
+        cancelable = true,
+      )
     }
   }
 
@@ -859,12 +899,12 @@ class MainActivity : ComponentActivity() {
       val started = startEngineWithStreaming(term)
       if (started) {
         term.appendLine("引擎就绪")
-        terminalScreen.setEngineStatus(true, "")
+        updateEngineStatus(true, "")
         startEngineService(); applyShizukuKeepAlive()
       } else {
         term.appendLine("引擎启动超时")
         appendEngineDiagnostics(term)
-        terminalScreen.setEngineStatus(false, "")
+        updateEngineStatus(false, "")
       }
     }.start()
   }
@@ -878,13 +918,13 @@ class MainActivity : ComponentActivity() {
         // 运行时就绪判定：node 已存在但架构错误时，跳过内嵌重解压（内嵌同样是错的）。
         val needArchFix = !engineManager.nodeArchMatchesDevice()
         if (!needArchFix && !engineManager.snapshotFresh()) {
-          terminalScreen.setEngineStatus(false, "正在更新运行时（约 70MB）…")
+          updateEngineStatus(false, "正在更新运行时（约 70MB）…")
           val ok = engineManager.refreshSnapshot { done, _ ->
             terminalScreen.terminal().appendProgress("解压运行时", "更新运行时", done, 0)
           }
           if (!ok) {
             terminalScreen.terminal().appendLine("运行时更新失败，请重试")
-            terminalScreen.setEngineStatus(false, "")
+            updateEngineStatus(false, "")
             return@Thread
           }
         }
@@ -909,7 +949,7 @@ class MainActivity : ComponentActivity() {
             terminalScreen.terminal().appendLine("在线更新失败，引擎无法启动（请检查网络/更新源）")
             terminalScreen.terminal().appendLine(archDiagnostic())
             appendEngineDiagnostics(terminalScreen.terminal())
-            terminalScreen.setEngineStatus(false, "")
+            updateEngineStatus(false, "")
             showEngineFailureDialog("在线更新失败（架构不匹配）")
             return@Thread
           }
@@ -920,11 +960,11 @@ class MainActivity : ComponentActivity() {
         if (started) {
           startEngineService()
           applyShizukuKeepAlive()
-          terminalScreen.setEngineStatus(true, "引擎就绪")
+          updateEngineStatus(true, "引擎就绪")
         } else {
           terminalScreen.terminal().appendLine("引擎启动超时，请重试")
           appendEngineDiagnostics(terminalScreen.terminal())
-          terminalScreen.setEngineStatus(false, "")
+          updateEngineStatus(false, "")
         }
       } finally {
         engineFlowRunning.set(false)
@@ -1455,6 +1495,7 @@ class MainActivity : ComponentActivity() {
     fun addTab(label: String, iconRes: Int, tab: Tab) {
       inner.addView(buildNavItem(label, iconRes, tab), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
     }
+    addTab(I18n.t(this, "主页", "Home"), R.drawable.ic_home, Tab.HOME)
     addTab(I18n.t(this, "终端", "Terminal"), R.drawable.ic_terminal, Tab.TERMINAL)
     addTab(I18n.t(this, "插件", "Plugins"), R.drawable.ic_plugin, Tab.PLUGINS)
     addTab(I18n.t(this, "设置", "Settings"), R.drawable.ic_settings, Tab.SETTINGS)
@@ -1475,6 +1516,7 @@ class MainActivity : ComponentActivity() {
       rail.addView(buildNavItem(label, iconRes, tab),
         LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
     }
+    addTab(I18n.t(this, "主页", "Home"), R.drawable.ic_home, Tab.HOME)
     addTab(I18n.t(this, "终端", "Terminal"), R.drawable.ic_terminal, Tab.TERMINAL)
     addTab(I18n.t(this, "插件", "Plugins"), R.drawable.ic_plugin, Tab.PLUGINS)
     addTab(I18n.t(this, "设置", "Settings"), R.drawable.ic_settings, Tab.SETTINGS)
@@ -1499,6 +1541,7 @@ class MainActivity : ComponentActivity() {
     currentTab = tab
     refreshNavHighlight(tab)
     val screens = mapOf(
+      Tab.HOME to homeScreen,
       Tab.TERMINAL to terminalScreen,
       Tab.PLUGINS to pluginsScreen,
       Tab.SETTINGS to settingsScreen,
@@ -1508,6 +1551,7 @@ class MainActivity : ComponentActivity() {
       else { s.animate().cancel(); s.visibility = View.GONE }
     }
     when (tab) {
+      Tab.HOME -> homeScreen.refresh()
       Tab.TERMINAL -> { if (autoStartEngineEnabled()) Thread { if (!EngineProbe.check().optBoolean("running", false)) runOnUiThread { startEngineFlow() } }.start() }
       Tab.PLUGINS -> pluginsScreen.refresh()
       Tab.SETTINGS -> settingsScreen.refresh()
@@ -1638,7 +1682,7 @@ class MainActivity : ComponentActivity() {
         runOnUiThread { webView.clearCache(true) }
         runOnUiThread {
           terminalScreen.terminal().appendLine("缓存已清理")
-          terminalScreen.refresh()
+          homeScreen.refresh()
         }
       } catch (t: Throwable) {
         runOnUiThread {

@@ -1,6 +1,5 @@
 package com.dshmobile.shell
 
-import android.app.AlertDialog
 import android.content.Context
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
@@ -62,9 +61,6 @@ class SettingsScreen(context: Context, private val callbacks: Callbacks) : Linea
     visibility = View.GONE
   }
 
-  private val aboutVersionText = TextView(context)
-  private val aboutInfoText = TextView(context)
-
   /** 更新源列表容器（更新子页，refreshMirrorList 重建）。 */
   private lateinit var mirrorList: LinearLayout
   /** 更新源延迟行标签（测速结果实时刷新）。 */
@@ -92,9 +88,9 @@ class SettingsScreen(context: Context, private val callbacks: Callbacks) : Linea
     addView(subContainer, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
   }
 
-  /** 刷新关于子页信息（版本号 / 引擎状态等）。 */
+  /** 刷新下载记录 / 更新源列表等动态子页内容。 */
   fun refresh() {
-    post { refreshAboutInfo(); refreshDownloadHistory(); refreshMirrorList() }
+    post { refreshDownloadHistory(); refreshMirrorList() }
   }
 
   /** 是否正停留在某个子页。 */
@@ -586,7 +582,7 @@ class SettingsScreen(context: Context, private val callbacks: Callbacks) : Linea
     addView(value)
   }
 
-  /** 关于（KernelSU 风格）：居中图标/名称/版本 + 信息行 + 占位链接行 + 版权。 */
+  /** 关于页（重建）：居中 Logo + 名称 + 版本 → 系统信息 → 全宽操作按钮 → 版权。 */
   private fun buildAbout(body: LinearLayout) {
     // 顶部：图标 + 名称 + 版本（居中）
     val header = LinearLayout(context).apply {
@@ -611,29 +607,34 @@ class SettingsScreen(context: Context, private val callbacks: Callbacks) : Linea
       },
       LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT),
     )
-    // 先把成员 aboutVersionText 从旧父容器解绑，再挂到新 header
-    (aboutVersionText.parent as? ViewGroup)?.removeView(aboutVersionText)
-    aboutVersionText.apply {
+    val versionText = TextView(context).apply {
       textSize = 12f
       setTextColor(resources.getColor(R.color.text_secondary, null))
       gravity = Gravity.CENTER_HORIZONTAL
       setPadding(0, dp(4), 0, 0)
     }
-    header.addView(aboutVersionText, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+    val versionName = try {
+      context.packageManager.getPackageInfo(context.packageName, 0).versionName
+    } catch (_: Throwable) {
+      "?"
+    }
+    versionText.text = I18n.t(context, "版本 ", "Version ") + versionName
+    header.addView(versionText, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
     body.addView(header)
 
     body.addView(divider())
 
-    // 先把成员 aboutInfoText 从旧父容器解绑，再挂到新 body
-    (aboutInfoText.parent as? ViewGroup)?.removeView(aboutInfoText)
-    aboutInfoText.textSize = 12f
-    aboutInfoText.setLineSpacing(dp(3).toFloat(), 1f)
-    aboutInfoText.setTextColor(resources.getColor(R.color.text, null))
-    body.addView(aboutInfoText, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) })
-
+    // 系统信息
+    val infoText = TextView(context).apply {
+      textSize = 12f
+      setLineSpacing(dp(3).toFloat(), 1f)
+      setTextColor(resources.getColor(R.color.text, null))
+      text = I18n.t(context, "系统信息加载中…", "Loading system info…")
+    }
+    body.addView(infoText, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) })
     body.addView(divider(), LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) })
 
-    // 社区 / 项目入口：全宽单列纵向按钮（图标+文字+箭头），避免小屏下按钮被裁剪/遮挡
+    // 操作按钮：全宽单列纵向，避免小屏下按钮被裁剪/遮挡
     body.addView(
       fullWidthTile(R.drawable.ic_web, I18n.t(context, "开源地址", "Open source")) { callbacks.onOpenUrl("https://github.com/YOYOFeelings/DeepSeek-Harness-Android") },
       LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) },
@@ -662,6 +663,23 @@ class SettingsScreen(context: Context, private val callbacks: Callbacks) : Linea
       },
       LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT),
     )
+
+    // 后台探测引擎状态并回填
+    Thread {
+      try {
+        val running = EngineProbe.check().optBoolean("running", false)
+        val dshDir = File(context.filesDir, "home/.dsh")
+        val sb = StringBuilder()
+        sb.append("Android: ").append(Build.VERSION.RELEASE).append(" / SDK ").append(Build.VERSION.SDK_INT).append('\n')
+        sb.append("DSH_HOME: ").append(dshDir.absolutePath).append('\n')
+        sb.append(I18n.t(context, "引擎状态: ", "Engine: "))
+          .append(if (running) I18n.t(context, "运行中", "running") else I18n.t(context, "未运行", "stopped")).append('\n')
+        sb.append(I18n.t(context, "运行时快照: ", "Runtime snapshot: "))
+          .append(if (File(context.filesDir, "usr/bin/node").exists()) I18n.t(context, "已解压", "extracted") else I18n.t(context, "缺失", "missing"))
+        post { infoText.text = sb.toString() }
+      } catch (_: Throwable) {
+      }
+    }.start()
   }
 
   /** 终端：说明日志统一在主页终端 + 快捷入口。 */
@@ -694,45 +712,6 @@ class SettingsScreen(context: Context, private val callbacks: Callbacks) : Linea
       flatButton(I18n.t(context, "打开插件页", "Open Plugins"), accent = true) { callbacks.onOpenPlugins() },
       LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) },
     )
-  }
-
-  // ============ 刷新逻辑 ============
-
-  /** 刷新关于区：版本号 + Android / DSH_HOME / 引擎状态 / 运行时快照。 */
-  private fun refreshAboutInfo() {
-    try {
-      val pkg = try {
-        context.packageManager.getPackageInfo(context.packageName, 0)
-      } catch (_: Throwable) {
-        null
-      }
-      // versionCode：API 28+ 用 longVersionCode，更早平台退回 int 的 versionCode（防 NoSuchMethodError）。
-      val versionCode: Long = if (pkg == null) {
-        0L
-      } else if (Build.VERSION.SDK_INT >= 28) {
-        pkg.longVersionCode
-      } else {
-        pkg.versionCode.toLong()
-      }
-      aboutVersionText.text = I18n.t(context, "版本 ", "Version ") + (pkg?.versionName ?: "?") + " (" + versionCode + ")"
-      // 引擎探测放后台线程，结果 post 回主线程，避免 NetworkOnMainThreadException/ANR
-      Thread {
-        try {
-          val running = EngineProbe.check().optBoolean("running", false)
-          val dshDir = File(context.filesDir, "home/.dsh")
-          val sb = StringBuilder()
-          sb.append("Android: ").append(Build.VERSION.RELEASE).append(" / SDK ").append(Build.VERSION.SDK_INT).append('\n')
-          sb.append("DSH_HOME: ").append(dshDir.absolutePath).append('\n')
-          sb.append(I18n.t(context, "引擎状态: ", "Engine: "))
-            .append(if (running) I18n.t(context, "运行中", "running") else I18n.t(context, "未运行", "stopped")).append('\n')
-          sb.append(I18n.t(context, "运行时快照: ", "Runtime snapshot: "))
-            .append(if (File(context.filesDir, "usr/bin/node").exists()) I18n.t(context, "已解压", "extracted") else I18n.t(context, "缺失", "missing"))
-          post { aboutInfoText.text = sb.toString() }
-        } catch (_: Throwable) {
-        }
-      }.start()
-    } catch (_: Throwable) {
-    }
   }
 
   // ============ 操作逻辑 ============
@@ -990,11 +969,13 @@ class SettingsScreen(context: Context, private val callbacks: Callbacks) : Linea
 
   /** QQ 群弹窗：展示官方 QQ 群号。 */
   private fun showQQGroupDialog() {
-    AlertDialog.Builder(context)
-      .setTitle(I18n.t(context, "加入 QQ 群", "Join QQ Group"))
-      .setMessage(I18n.t(context, "QQ 群 1：200317338\nQQ 群 2：932593560", "QQ Group 1: 200317338\nQQ Group 2: 932593560"))
-      .setPositiveButton(I18n.t(context, "确定", "OK"), null)
-      .show()
+    DialogUi.show(
+      context = context,
+      title = I18n.t(context, "加入 QQ 群", "Join QQ Group"),
+      message = I18n.t(context, "QQ 群 1：200317338\nQQ 群 2：932593560", "QQ Group 1: 200317338\nQQ Group 2: 932593560"),
+      iconRes = R.drawable.ic_info,
+      actions = listOf(DialogUi.Action(I18n.t(context, "确定", "OK"), accent = true)),
+    )
   }
 
   private fun showToast(text: String) {

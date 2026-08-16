@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 弹窗卡片：白底 + 圆角 18dp，无投影 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+  <solid android:color="@color/surface" />
+  <corners android:radius="18dp" />
+</shape>
