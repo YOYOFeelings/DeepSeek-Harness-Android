@@ -70,15 +70,29 @@ class MainActivity : ComponentActivity() {
   /** 启动流程只允许触发一次。 */
   private val flowStarted = AtomicBoolean(false)
 
-  /** APK 下载完成广播接收：匹配 downloadId 后触发系统安装。 */
+  /** APK 下载完成广播接收：匹配 downloadId 后校验状态与 APK 有效性，成功则安装，
+   *  失败（网络错误或镜像返回非 APK 内容）则自动换下一个加速源重试。 */
   private val apkDownloadReceiver = object : BroadcastReceiver() {
     override fun onReceive(c: Context, intent: Intent) {
       if (intent.action == DownloadManager.ACTION_DOWNLOAD_COMPLETE) {
         val id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L)
         if (id == apkUpdateManager.lastDownloadId()) {
           val apk = apkUpdateManager.findDownloadedApk()
-          if (apk != null) {
-            try { apkUpdateManager.installApk(apk) } catch (_: Throwable) { }
+          val ok = apkUpdateManager.downloadStatus(id) == DownloadManager.STATUS_SUCCESSFUL &&
+            apkUpdateManager.isApkValid(apk)
+          if (ok) {
+            try { apk?.let { apkUpdateManager.installApk(it) } } catch (_: Throwable) { }
+          } else {
+            // 下载失败或产物无效：自动换下一个加速源重试
+            apk?.delete()
+            val next = apkUpdateManager.retryWithNextSource()
+            val msg = if (next != null)
+              I18n.t(c, "当前加速源下载失败，已自动切换下一个源重试…", "Current source failed; switching to the next one and retrying…")
+            else
+              I18n.t(c, "所有更新源均下载失败，请检查网络后重试", "All update sources failed; check your network and retry")
+            try {
+              if (::terminalScreen.isInitialized) terminalScreen.terminal().appendLine(msg)
+            } catch (_: Throwable) { }
           }
         }
       }

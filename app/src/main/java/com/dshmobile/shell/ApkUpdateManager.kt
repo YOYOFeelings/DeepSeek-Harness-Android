@@ -44,6 +44,9 @@ class ApkUpdateManager(private val context: Context) {
   /** 最近一次下载任务的 downloadId（-1 = 无）。 */
   fun lastDownloadId(): Long = prefs.getLong(KEY_DOWNLOAD_ID, -1L)
 
+  /** 当前 APK 下载的待尝试加速源 URL 队列（用于下载失败时自动换源回退）。 */
+  private val pendingDownloadUrls = java.util.concurrent.ConcurrentLinkedQueue<String>()
+
   /** 解析 GitHub 直链为加速地址（经镜像前缀；无前缀源原样返回）。 */
   fun resolveApkUrl(apkUrl: String, mirror: Mirror? = null): String =
     updateManager.resolveForDownload(apkUrl, mirror ?: updateManager.activeMirror)
@@ -104,21 +107,41 @@ class ApkUpdateManager(private val context: Context) {
   }
 
   private fun fetchLatest(): UpdateInfo {
-    val conn = URL(RELEASE_API).openConnection() as HttpURLConnection
-    conn.requestMethod = "GET"
-    conn.connectTimeout = 10_000
-    conn.readTimeout = 10_000
-    conn.setRequestProperty("Accept", "application/vnd.github+json")
-    conn.setRequestProperty("User-Agent", "DeepSeek-Harness-Android")
-    val code = conn.responseCode
-    if (code !in 200..299) throw RuntimeException("GitHub API $code")
-    val text = conn.inputStream.bufferedReader().use { it.readText() }
-    val json = JSONObject(text)
-    val tag = json.optString("tag_name", "")
+    // 候选：官方 API 优先，失败后经激活源/默认源镜像代理重试
+    val candidates = mutableListOf(RELEASE_API)
+    val mirror = updateManager.activeMirror ?: updateManager.mirrorById(UpdateManager.DEFAULT_MIRROR_ID)
+    if (mirror != null) candidates.add(updateManager.resolveForDownload(RELEASE_API, mirror))
+    var lastErr: Throwable? = null
+    var json: JSONObject? = null
+    for (c in candidates) {
+      try {
+        val conn = URL(c).openConnection() as HttpURLConnection
+        conn.requestMethod = "GET"
+        conn.connectTimeout = 10_000
+        conn.readTimeout = 10_000
+        conn.setRequestProperty("Accept", "application/vnd.github+json")
+        conn.setRequestProperty("User-Agent", "DeepSeek-Harness-Android")
+        val code = conn.responseCode
+        if (code in 200..299) {
+          val text = conn.inputStream.bufferedReader().use { it.readText() }
+          if (text.isNotBlank() && !looksLikeHtml(text)) {
+            json = JSONObject(text)
+            break
+          }
+          lastErr = RuntimeException("GitHub API 返回非 JSON 内容")
+        } else {
+          lastErr = RuntimeException("GitHub API $code")
+        }
+      } catch (t: Throwable) {
+        lastErr = t
+      }
+    }
+    val resp = json ?: throw (lastErr ?: RuntimeException("无法获取更新信息"))
+    val tag = resp.optString("tag_name", "")
     val remoteVersion = tag.removePrefix("v")
-    val body = json.optString("body", "")
+    val body = resp.optString("body", "")
     var apkUrl = ""
-    val assets = json.optJSONArray("assets")
+    val assets = resp.optJSONArray("assets")
     if (assets != null) {
       for (i in 0 until assets.length()) {
         val asset = assets.optJSONObject(i) ?: continue
@@ -133,6 +156,16 @@ class ApkUpdateManager(private val context: Context) {
     val hasNew = remoteVersion.isNotBlank() && apkUrl.isNotBlank() && compareVersions(remoteVersion, localVersion) > 0
     val isForced = body.contains("强制更新") || body.contains("FORCE", ignoreCase = true)
     return UpdateInfo(hasNew, remoteVersion, body, apkUrl, isForced)
+  }
+
+  /** 响应是否为 HTML/垃圾页（镜像可能返回 404/挑战页而非 JSON）。 */
+  private fun looksLikeHtml(body: String): Boolean {
+    val trimmed = body.trim()
+    return trimmed.startsWith("<!doctype", ignoreCase = true) ||
+      trimmed.startsWith("<html", ignoreCase = true) ||
+      trimmed.startsWith("<!--") ||
+      (trimmed.startsWith("<") && (trimmed.contains("<head", ignoreCase = true) ||
+        trimmed.contains("<body", ignoreCase = true) || trimmed.contains("<title", ignoreCase = true)))
   }
 
   private fun localVersionName(): String = try {
@@ -205,12 +238,35 @@ class ApkUpdateManager(private val context: Context) {
     )
   }
 
-  /** 使用系统 DownloadManager 下载 APK 到外部缓存目录，通知栏显示进度；返回 downloadId。 */
+  /** 使用系统 DownloadManager 下载 APK 到外部缓存目录，通知栏显示进度；返回 downloadId。
+   *  默认（未显式选择源时）以内置默认加速源兜底，并按「激活源优先 + 其余源 + 官方直连」构造
+   *  多源回退队列（对 GitHub 直链做镜像解析），首个候选立即 enqueue；
+   *  下载失败或产物无效时由 retryWithNextSource() 自动换源接力。 */
   fun startDownload(downloadUrl: String): Long {
+    val um = updateManager
+    val active = um.activeMirror ?: um.mirrorById(UpdateManager.DEFAULT_MIRROR_ID)
+    val all = um.allMirrors()
+    val ordered = listOfNotNull(active) + all.filter { it.id != active?.id }
+    pendingDownloadUrls.clear()
+    for (m in ordered) pendingDownloadUrls.offer(um.resolveForDownload(downloadUrl, m))
+    // 镜像全失败后的最后兜底：官方直连
+    pendingDownloadUrls.offer(downloadUrl)
+    val url = pendingDownloadUrls.poll() ?: downloadUrl
+    return enqueueDownload(url)
+  }
+
+  /** 下载失败/产物无效时调用：换下一个候选加速源重新下载；无候选返回 null。 */
+  fun retryWithNextSource(): Long? {
+    val url = pendingDownloadUrls.poll() ?: return null
+    return enqueueDownload(url)
+  }
+
+  /** 真正 enqueue 下载任务并记录 downloadId（供下载完成广播匹配）。 */
+  private fun enqueueDownload(url: String): Long {
     val destDir = context.getExternalCacheDir() ?: context.cacheDir
     val dest = File(destDir, APK_FILE_NAME)
     if (dest.exists()) dest.delete()
-    val request = DownloadManager.Request(Uri.parse(downloadUrl))
+    val request = DownloadManager.Request(Uri.parse(url))
       .setTitle(I18n.t(context, "deepseek HARNESS 更新", "deepseek HARNESS update"))
       .setDescription(I18n.t(context, "正在下载新版本 APK…", "Downloading new APK…"))
       .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
