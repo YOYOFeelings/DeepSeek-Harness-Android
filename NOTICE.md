@@ -39,6 +39,7 @@ mirror updates, APK self-update, and plugin management.
 
 ## 🆕 新闻 / 动态
 
+- 2026-08（v0.11.8）：全面代码审计，修复 10 个 bug（含多镜像回退失效、进度条 off-by-one、JS 桥注入防护缺失、原子切换无回滚、OOM 等）。详见 [AUDIT-REPORT.md](AUDIT-REPORT.md)。
 - 2026-08（v0.11.7）：修复公告弹窗/更新检查（URL 硬编码指向 YOYOFeelings 仓库）、Web 端插件配置无法保存（localStorage shim 注入失效）、引擎启动并发竞态（profiles 目录无同步锁）三项问题。workflow 新增自动版本递增，每次推送自动计算并写回 build.gradle.kts。
 - 2026-08（v0.11.6）：修复代码审查发现的 4 项 Bug——通知栏残留、主线程阻塞（.commit→.apply）、日志无限增长、Activity 销毁后后台线程泄漏。
 - 2026-08（v0.11.5）：修复 MainActivity 编译错误（缺少 kotlinx.coroutines 导入、可空类型处理）。
