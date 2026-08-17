@@ -173,8 +173,8 @@ class MainActivity : ComponentActivity() {
   /** 当前所在页签（系统返回键在设置页内页时先回退内页）。 */
   private var currentTab = Tab.HOME
 
-  /** 导航视图（item/icon/label），供底部导航与左侧导航共用高亮。 */
-  private data class NavViews(val item: LinearLayout, val icon: ImageView, val label: TextView)
+  /** 导航视图（item/icon/label），供底部导航与左侧导航共用高亮；isBottom 区分底部导航（带动效）。 */
+  private data class NavViews(val item: LinearLayout, val icon: ImageView, val label: TextView, val isBottom: Boolean = true)
 
   private val navTabs = HashMap<Tab, MutableList<NavViews>>()
 
@@ -229,38 +229,13 @@ class MainActivity : ComponentActivity() {
     }
   }
 
-  /** 背景图片选择（相册）：复制到 filesDir/background.png（失败回退 cacheDir），保存并应用。 */
+  /** 背景图片选择（相册）：直接把所选图 Uri 交给全屏裁剪覆盖层；确认后由裁剪回调落盘并应用，取消不改动。 */
   private val backgroundImagePicker =
     registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
       if (uri == null) return@registerForActivityResult
-      val term = terminalScreen.terminal()
-      try {
-        var target = File(filesDir, "background.png")
-        var ok = false
-        try {
-          contentResolver.openInputStream(uri)?.use { input ->
-            target.outputStream().use { out -> input.copyTo(out) }
-          }
-          ok = target.length() > 0
-        } catch (_: Throwable) {
-          ok = false
-        }
-        if (!ok) {
-          target = File(cacheDir, "background.png")
-          contentResolver.openInputStream(uri)?.use { input ->
-            target.outputStream().use { out -> input.copyTo(out) }
-          }
-        }
-        prefs.edit()
-          .putString("settings_bg_type", "image")
-          .putString("settings_bg_value", target.absolutePath)
-          .apply()
-        applyBackground()
-        if (::settingsScreen.isInitialized) settingsScreen.refreshAppearance()
-        term.appendLine("背景图片已设置")
-      } catch (t: Throwable) {
-        term.appendLine("背景图片设置失败：" + (t.message ?: t.javaClass.simpleName))
-      }
+      // 不预写文件：裁剪覆盖层直接按 content:// 解码；仅确认后才写 background.png，
+      // 避免「取消」把所选图残留到正式背景文件上、下次启动意外生效。
+      showBackgroundCrop(uri)
     }
 
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -392,12 +367,6 @@ class MainActivity : ComponentActivity() {
     contentFrame.addView(webOverlay, FrameLayout.LayoutParams(
       ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT,
     ))
-    // 首次引导页：盖在最上层（webOverlay 之后加入），默认 GONE。
-    onboardingView = buildOnboardingView()
-    contentFrame.addView(onboardingView, FrameLayout.LayoutParams(
-      ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT,
-    ))
-    onboardingView.visibility = View.GONE
     rootFrame.addView(contentFrame, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
     bottomNavBar = buildBottomNavBar()
     rootFrame.addView(bottomNavBar, FrameLayout.LayoutParams(
@@ -407,6 +376,17 @@ class MainActivity : ComponentActivity() {
     rootFrame.addView(leftNavRail, FrameLayout.LayoutParams(
       dp(78), ViewGroup.LayoutParams.MATCH_PARENT, Gravity.LEFT,
     ))
+    // 引导页：盖在 rootFrame 最顶层（盖住导航栏），仅首次启动时构建。
+    if (!prefs.getBoolean("guide_seen", false)) {
+      onboardingView = buildOnboardingView()
+      rootFrame.addView(onboardingView, FrameLayout.LayoutParams(
+        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT,
+      ))
+      guideActive = true
+      onboardingView.visibility = View.VISIBLE
+    } else {
+      guideActive = false
+    }
     setContentView(rootFrame)
     applyBackground()
     showTab(Tab.HOME)
@@ -613,7 +593,8 @@ class MainActivity : ComponentActivity() {
     else -> GradientDrawable.Orientation.LEFT_RIGHT
   }
 
-  /** 后台下载 URL 图片到本地文件（≤25MB，成功写 filesDir/background.png，写入失败回退 cacheDir）。
+  /** 后台下载 URL 图片到本地临时文件（≤25MB，写 cacheDir/crop-source.png，写入失败回退 filesDir）。
+   *  仅作全屏裁剪的图片源；确认裁剪后才落盘为正式背景 background.png，取消则不影响已应用背景。
    *  返回已保存文件或 null；必须在后台线程调用。 */
   private fun performDownloadBackground(url: String): File? {
     var conn: HttpURLConnection? = null
@@ -638,12 +619,12 @@ class MainActivity : ComponentActivity() {
       val data = buffer.toByteArray()
       if (data.isEmpty()) return null
       try {
-        val f = File(filesDir, "background.png")
+        val f = File(cacheDir, "crop-source.png")
         f.writeBytes(data)
         return f
       } catch (_: Throwable) {
         try {
-          val f = File(cacheDir, "background.png")
+          val f = File(filesDir, "crop-source.png")
           f.writeBytes(data)
           return f
         } catch (_: Throwable) {
@@ -657,7 +638,56 @@ class MainActivity : ComponentActivity() {
     }
   }
 
-  /** 下载 URL 图片并应用为背景（后台下载 → UI 线程持久化 + 应用 + 提示）。 */
+  /** 显示全屏背景裁剪覆盖层（盖住 rootFrame 最上层，半透明黑）。
+   *  确认：把裁剪结果保存到 filesDir/background.png（失败回退 cacheDir），写 prefs 并应用、移除覆盖层；
+   *  取消：仅移除覆盖层，不做任何改动。 */
+  private fun showBackgroundCrop(uri: Uri) {
+    if (!::rootFrame.isInitialized) return
+    val cropView = BackgroundCropView(this, uri)
+    cropView.setCallback(object : BackgroundCropView.Callback {
+      override fun onCropConfirm(cropped: Bitmap) {
+        try {
+          var target = File(filesDir, "background.png")
+          var ok = false
+          try {
+            target.outputStream().use { out ->
+              cropped.compress(Bitmap.CompressFormat.PNG, 100, out)
+            }
+            ok = target.length() > 0
+          } catch (_: Throwable) {
+            ok = false
+          }
+          if (!ok) {
+            target = File(cacheDir, "background.png")
+            target.outputStream().use { out ->
+              cropped.compress(Bitmap.CompressFormat.PNG, 100, out)
+            }
+          }
+          prefs.edit()
+            .putString("settings_bg_type", "image")
+            .putString("settings_bg_value", target.absolutePath)
+            .apply()
+          applyBackground()
+          if (::settingsScreen.isInitialized) settingsScreen.refreshAppearance()
+          terminalScreen.terminal().appendLine("背景图片已设置")
+        } catch (t: Throwable) {
+          Toast.makeText(this@MainActivity, "背景图片保存失败：" + (t.message ?: t.javaClass.simpleName), Toast.LENGTH_SHORT).show()
+        } finally {
+          if (cropView.parent != null) rootFrame.removeView(cropView)
+          if (!cropped.isRecycled) cropped.recycle()
+        }
+      }
+
+      override fun onCropCancel() {
+        if (cropView.parent != null) rootFrame.removeView(cropView)
+      }
+    })
+    rootFrame.addView(cropView, FrameLayout.LayoutParams(
+      ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT,
+    ))
+  }
+
+  /** 下载 URL 图片为背景：后台下载 → 成功进入全屏裁剪覆盖层，确认后保存裁剪结果并应用。 */
   private fun downloadBackground(url: String) {
     LogFox.trackUser(this, "other", "downloadBackground")
     if (!url.startsWith("http://") && !url.startsWith("https://")) {
@@ -668,13 +698,7 @@ class MainActivity : ComponentActivity() {
       val file = performDownloadBackground(url)
       runOnUiThread {
         if (file != null) {
-          prefs.edit()
-            .putString("settings_bg_type", "image")
-            .putString("settings_bg_value", file.absolutePath)
-            .apply()
-          applyBackground()
-          if (::settingsScreen.isInitialized) settingsScreen.refreshAppearance()
-          Toast.makeText(this, "背景图片已更新", Toast.LENGTH_SHORT).show()
+          showBackgroundCrop(Uri.fromFile(file))
         } else {
           Toast.makeText(this, "下载失败", Toast.LENGTH_SHORT).show()
         }
@@ -682,7 +706,7 @@ class MainActivity : ComponentActivity() {
     }.start()
   }
 
-  /** 随机获取图片并应用为背景：后台依次尝试候选图源，首个成功即应用；全部失败提示。 */
+  /** 随机获取图片为背景：后台依次尝试候选图源，首个成功即进入全屏裁剪覆盖层；全部失败提示。 */
   private fun randomBackground() {
     LogFox.trackUser(this, "other", "randomBackground")
     val candidates = listOf(
@@ -700,13 +724,7 @@ class MainActivity : ComponentActivity() {
       val file = saved
       runOnUiThread {
         if (file != null) {
-          prefs.edit()
-            .putString("settings_bg_type", "image")
-            .putString("settings_bg_value", file.absolutePath)
-            .apply()
-          applyBackground()
-          if (::settingsScreen.isInitialized) settingsScreen.refreshAppearance()
-          Toast.makeText(this, "背景图片已更新", Toast.LENGTH_SHORT).show()
+          showBackgroundCrop(Uri.fromFile(file))
         } else {
           Toast.makeText(this, "随机图片获取失败", Toast.LENGTH_SHORT).show()
         }
@@ -719,14 +737,11 @@ class MainActivity : ComponentActivity() {
     if (flowStarted.compareAndSet(false, true)) startFlow()
   }
 
-  /** 入口：未看过引导页 → 先展示全屏引导页；否则 → 进安装（未装完）或主页（已装完）。 */
+  /** 入口：引导页已在 onCreate 中（guide_seen=false 时）全屏展示并置 guideActive=true，等待「开始使用」；否则直接进安装（未装完）或主页（已装完）。 */
   private fun startFlow() {
-    if (!prefs.getBoolean("guide_seen", false)) {
-      guideActive = true
-      onboardingView.visibility = View.VISIBLE
-    } else {
-      startPostGuide()
-    }
+    // 引导页展示中：不重复拉起，等「开始使用」回调 startPostGuide。
+    if (guideActive) return
+    startPostGuide()
   }
 
   /** 引导页「开始使用」：标记已看 → 进安装（未装完）或主页（已装完）。 */
@@ -2121,7 +2136,7 @@ class MainActivity : ComponentActivity() {
   /** 导航项（图标 + 文字竖排居中，选中高亮品牌蓝）；点击带按压缩放动画。
    *  BUGFIX v0.10.9：图标一律用代码 setTint 上色（去掉 XML android:tint，避免
    *  部分 OEM 设备上 theme-attr tint 导致矢量图标不显示）。 */
-  private fun buildNavItem(label: String, iconRes: Int, tab: Tab): LinearLayout {
+  private fun buildNavItem(label: String, iconRes: Int, tab: Tab, isBottom: Boolean = true): LinearLayout {
     val item = LinearLayout(this).apply {
       orientation = LinearLayout.VERTICAL
       gravity = android.view.Gravity.CENTER
@@ -2145,10 +2160,12 @@ class MainActivity : ComponentActivity() {
       textSize = 11f
       gravity = android.view.Gravity.CENTER
       setPadding(0, dp(3), 0, 0)
+      // 底部导航初始隐藏文字（仅图标），选中后由 refreshNavHighlight 淡入；左侧导航常显。
+      visibility = if (isBottom) View.GONE else View.VISIBLE
     }
     item.addView(icon)
     item.addView(labelTv)
-    navTabs.getOrPut(tab) { mutableListOf() }.add(NavViews(item, icon, labelTv))
+    navTabs.getOrPut(tab) { mutableListOf() }.add(NavViews(item, icon, labelTv, isBottom))
     return item
   }
 
@@ -2170,7 +2187,7 @@ class MainActivity : ComponentActivity() {
       setPadding(0, dp(4), 0, dp(4))
     }
     fun addTab(label: String, iconRes: Int, tab: Tab) {
-      inner.addView(buildNavItem(label, iconRes, tab), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+      inner.addView(buildNavItem(label, iconRes, tab, true), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
     }
     addTab(I18n.t(this, "主页", "Home"), R.drawable.ic_home, Tab.HOME)
     addTab(I18n.t(this, "终端", "Terminal"), R.drawable.ic_terminal, Tab.TERMINAL)
@@ -2190,7 +2207,7 @@ class MainActivity : ComponentActivity() {
     }
     // 分割线让导航项视觉上更清晰
     fun addTab(label: String, iconRes: Int, tab: Tab) {
-      rail.addView(buildNavItem(label, iconRes, tab),
+      rail.addView(buildNavItem(label, iconRes, tab, false),
         LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
     }
     addTab(I18n.t(this, "主页", "Home"), R.drawable.ic_home, Tab.HOME)
@@ -2200,15 +2217,35 @@ class MainActivity : ComponentActivity() {
     return rail
   }
 
-  /** 高亮当前 tab（图标 + 文字品牌蓝），其余灰。 */
+  /** 高亮当前 tab（图标 + 文字品牌蓝），其余灰。
+   *  底部导航：选中项图标上移 -6dp + 文字淡入；非选中项复位 + 文字淡出隐藏（仅图标）。
+   *  左侧导航（横屏/大屏）：保持原有行为，图标 + 文字常显，仅切换高亮颜色。 */
   private fun refreshNavHighlight(active: Tab) {
     val accent = resources.getColor(R.color.accent, null)
     val inactive = resources.getColor(R.color.text_tertiary, null)
     for ((tab, views) in navTabs) {
       val selected = tab == active
       for (v in views) {
-        v.icon.imageTintList = ColorStateList.valueOf(if (selected) accent else inactive)
-        v.label.setTextColor(if (selected) accent else inactive)
+        if (v.isBottom) {
+          if (selected) {
+            v.icon.animate().translationY(-dp(6).toFloat()).setDuration(150).start()
+            v.icon.imageTintList = ColorStateList.valueOf(accent)
+            v.label.animate().cancel()
+            v.label.visibility = View.VISIBLE
+            v.label.alpha = 0f
+            v.label.setTextColor(accent)
+            v.label.animate().alpha(1f).setDuration(150).start()
+          } else {
+            v.icon.animate().translationY(0f).setDuration(150).start()
+            v.icon.imageTintList = ColorStateList.valueOf(inactive)
+            v.label.animate().alpha(0f).setDuration(100).withEndAction { v.label.visibility = View.GONE }.start()
+          }
+        } else {
+          // 左侧导航：保持原有高亮逻辑（图标 + 文字常显）
+          v.icon.imageTintList = ColorStateList.valueOf(if (selected) accent else inactive)
+          v.label.setTextColor(if (selected) accent else inactive)
+          v.label.visibility = View.VISIBLE
+        }
       }
     }
   }

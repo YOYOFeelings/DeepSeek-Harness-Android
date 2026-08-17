@@ -217,13 +217,24 @@ class UpdateManager(private val context: Context) {
         var manifestBody: String? = null
         var bodyMirror: Mirror = mirrors.first()
         var anyReachable = false
+        // 是否拉到过清单但都不含本设备 ABI（供循环结束后抛出更明确的错误）。
+        var manifestFetchedWithoutAbi = false
         outer@ for (m in mirrors) {
           for (url in candidateManifestUrls()) {
             try {
               manifestBody = fetchText(m.resolve(url), m, readTimeoutMs = 20_000)
-              bodyMirror = m
-              usedManifestUrl = url
-              break@outer
+              // 清单必须命中本设备 ABI 快照才算成功；未命中则继续尝试备用清单/其它源，
+              // 修复 arm64 设备主清单仅含 x86_64 时 findSnapshot 返回 null → 更新失败。
+              val hit = findSnapshot(manifestBody)
+              if (hit != null) {
+                bodyMirror = m
+                usedManifestUrl = url
+                manifestFetchedWithoutAbi = false
+                break@outer
+              } else {
+                manifestFetchedWithoutAbi = true
+                onStage("检查", "清单无 " + abiName() + " 架构快照，尝试备用清单…")
+              }
             } catch (t: Throwable) {
               if (isNetworkError(t)) {
                 onStage("检查", "更新源 " + m.name + " 不可达，尝试下一个…")
@@ -238,6 +249,11 @@ class UpdateManager(private val context: Context) {
           throw IllegalStateException(
             if (anyReachable) "最新发布未附带 MANIFEST.txt（备用清单地址也不可用），请稍后再试或检查更新源"
             else "所有更新源均不可达，请检查网络或更换更新源"
+          )
+        }
+        if (manifestFetchedWithoutAbi) {
+          throw IllegalStateException(
+            "发布清单中无 " + abiName() + " 架构快照（已尝试主清单与备用清单），请在设置中更换更新源或稍后再试"
           )
         }
         onStage("检查", "解析发布清单…")

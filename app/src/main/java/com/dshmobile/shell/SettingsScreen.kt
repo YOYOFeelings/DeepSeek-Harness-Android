@@ -12,6 +12,8 @@ import android.os.Build
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.animation.AccelerateInterpolator
+import android.view.animation.DecelerateInterpolator
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -75,6 +77,8 @@ class SettingsScreen(context: Context, private val callbacks: Callbacks) : Linea
   private lateinit var customInput: EditText
   /** 下载记录文本（更新子页）。 */
   private lateinit var downloadHistoryText: TextView
+  /** 权限模式卡片列表（权限子页，刷新选中高亮用）。 */
+  private val permModeCards = mutableListOf<Pair<PermissionMode, LinearLayout>>()
 
   init {
     orientation = LinearLayout.VERTICAL
@@ -129,15 +133,25 @@ class SettingsScreen(context: Context, private val callbacks: Callbacks) : Linea
 
   // ============ 顶层导航 ============
 
-  /** 回到条目列表。 */
+  /** 回到条目列表（右滑出 + 淡出过渡，完成后显示列表）。 */
   private fun showList() {
-    subContainer.visibility = View.GONE
-    listContainer.visibility = View.VISIBLE
+    subContainer.animate().cancel()
+    subContainer.animate()
+      .alpha(0f)
+      .translationX(dp(40).toFloat())
+      .setDuration(160)
+      .setInterpolator(AccelerateInterpolator())
+      .withEndAction {
+        subContainer.visibility = View.GONE
+        listContainer.visibility = View.VISIBLE
+      }
+      .start()
   }
 
   /** 展示子页：清空 subContainer，加入顶部返回栏（‹ 返回 + 标题）与已构建内容，隐藏条目列表。 */
   private fun showPage(title: String, build: (LinearLayout) -> Unit) {
     currentPageTitle = title
+    subContainer.animate().cancel() // 中断可能仍在进行的返回动画，避免残留
     subContainer.removeAllViews()
     val page = LinearLayout(context).apply {
       orientation = LinearLayout.VERTICAL
@@ -188,6 +202,16 @@ class SettingsScreen(context: Context, private val callbacks: Callbacks) : Linea
     subContainer.addView(page, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
     subContainer.visibility = View.VISIBLE
     listContainer.visibility = View.GONE
+
+    // 从右滑入 + 淡入过渡（200ms）
+    subContainer.alpha = 0f
+    subContainer.translationX = dp(40).toFloat()
+    subContainer.animate()
+      .alpha(1f)
+      .translationX(0f)
+      .setDuration(200)
+      .setInterpolator(DecelerateInterpolator())
+      .start()
   }
 
   /** 顶层条目卡片（两列网格）：图标在上 + 标题在下，垂直居中，整卡可点击，无 "›" 箭头。
@@ -1152,8 +1176,100 @@ class SettingsScreen(context: Context, private val callbacks: Callbacks) : Linea
     }
   }
 
-  /** 权限子页：通知 / 所有文件访问 / 网络 三张权限卡片 + 说明。 */
+  /** 权限模式卡片：左侧图标 + 标题/说明/前置要求 + 右侧状态；点击选中并刷新高亮。 */
+  private fun buildPermModeCard(mode: PermissionMode, selected: Boolean, onClick: () -> Unit): LinearLayout =
+    LinearLayout(context).apply {
+      orientation = LinearLayout.HORIZONTAL
+      gravity = Gravity.CENTER_VERTICAL
+      setPadding(dp(12), dp(12), dp(12), dp(12))
+      background = resources.getDrawable(R.drawable.bg_card, null)
+      layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) }
+      isClickable = true
+      isFocusable = true
+      setOnClickListener { onClick() }
+      addView(
+        ImageView(context).apply {
+          setImageResource(R.drawable.ic_shield)
+          colorFilter = PorterDuffColorFilter(resources.getColor(R.color.accent, null), PorterDuff.Mode.SRC_IN)
+          layoutParams = LayoutParams(dp(22), dp(22)).apply { marginEnd = dp(12) }
+        },
+      )
+      val col = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+        layoutParams = LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
+      }
+      col.addView(
+        TextView(context).apply {
+          text = mode.label
+          textSize = 13f
+          typeface = Typeface.DEFAULT_BOLD
+          setTextColor(resources.getColor(R.color.text, null))
+        },
+        LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT),
+      )
+      col.addView(
+        TextView(context).apply {
+          text = mode.desc
+          textSize = 11f
+          setTextColor(resources.getColor(R.color.text_secondary, null))
+          setPadding(0, dp(2), 0, 0)
+        },
+        LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT),
+      )
+      col.addView(
+        TextView(context).apply {
+          text = mode.prereq
+          textSize = 10f
+          setTextColor(resources.getColor(R.color.text_tertiary, null))
+          setPadding(0, dp(2), 0, 0)
+        },
+        LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT),
+      )
+      addView(col)
+      // 右侧状态文字（可用/不可用 + 原因）。
+      addView(
+        TextView(context).apply {
+          text = mode.status(context)
+          textSize = 10f
+          setTextColor(resources.getColor(R.color.text_secondary, null))
+          layoutParams = LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply { marginStart = dp(8) }
+        },
+      )
+    }
+
+  /** 刷新权限模式卡片选中高亮（选中的加描边 + 浅色底，其余恢复 bg_card）。 */
+  private fun refreshPermModeHighlight() {
+    for ((mode, card) in permModeCards) {
+      val selected = mode == PermissionMode.load(context)
+      card.background = if (selected) {
+        GradientDrawable().apply {
+          shape = GradientDrawable.RECTANGLE
+          cornerRadius = dp(12).toFloat()
+          setColor(resources.getColor(R.color.accent_soft, null))
+          setStroke(dp(2), resources.getColor(R.color.accent, null))
+        }
+      } else {
+        resources.getDrawable(R.drawable.bg_card, null)
+      }
+    }
+  }
+
+  /** 权限子页：权限模式（命令执行通道）+ 通知 / 所有文件访问 / 网络 三张权限卡片 + 说明。 */
   private fun buildPermissions(body: LinearLayout) {
+    // 0) 权限模式（命令执行通道）：覆盖已跳过引导的升级用户，单选并持久化。
+    body.addView(sectionLabel(I18n.t(context, "权限模式（命令执行通道）", "Permission mode (command channel)")))
+    permModeCards.clear()
+    val current = PermissionMode.load(context)
+    for (mode in PermissionMode.entries) {
+      val card = buildPermModeCard(mode, mode == current) {
+        PermissionMode.save(context, mode)
+        refreshPermModeHighlight()
+      }
+      permModeCards.add(mode to card)
+      body.addView(card)
+    }
+    body.addView(divider(), LayoutParams(LayoutParams.MATCH_PARENT, 1).apply { topMargin = dp(6) })
+
     // 1) 通知权限（Android 13+ 需要运行时授权）
     body.addView(permCard(
       R.drawable.ic_info, "通知权限",
