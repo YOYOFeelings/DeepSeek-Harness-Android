@@ -6,8 +6,8 @@ on:
   workflow_dispatch:
     inputs:
       snapshot_url:
-        description: '快照下载地址（必填，x86_64 架构）'
-        required: true
+        description: '快照下载地址（可选，留空则从 v1.0 release 按架构自动下载）'
+        required: false
         default: ''
       version_override:
         description: '覆盖版本号（可选，格式：x.y.z；留空则自动计算）'
@@ -17,128 +17,130 @@ on:
         description: '覆盖 versionCode（可选，整数；留空则自动递增）'
         required: false
         default: ''
+      apk_arch:
+        description: '构建架构（release 触发时可选：arm64 / x86_64 / all）'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - arm64
+          - x86_64
+          - all
 
 permissions:
   contents: write
 
-jobs:
-  build:
-    name: Build APK
-    runs-on: ubuntu-latest
+env:
+  RELEASE_TAG: 'v1.0'
+  JAVA_VERSION: '17'
+  DISTRIBUTION: 'temurin'
 
+jobs:
+  # ── 阶段 1：计算版本号（在所有构建前执行一次）────────────────────────────
+  version:
+    name: Compute version
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # 全量拉取历史，用于计算相对 tag 的 commit 数
+          fetch-depth: 0
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          java-version: '17'
-          distribution: 'temurin'
-          cache: gradle
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Download snapshot
-        run: |
-          mkdir -p app/src/main/assets
-          echo "下载快照: ${{ inputs.snapshot_url }}"
-          curl -L --progress-bar -o app/src/main/assets/snapshot.tar.xz "${{ inputs.snapshot_url }}"
-          echo "快照大小:"
-          ls -lh app/src/main/assets/snapshot.tar.xz
-
-      # ── 版本自动计算与写入 ─────────────────────────────────────────────
-      # 策略：
-      #   1. 若 workflow_dispatch 提供了 version_override → 直接采用（可手动指定任意版本）
-      #   2. 否则从 build.gradle.kts 读取 BASE_VERSION + BASE_CODE
-      #   3. 找到最近的同类 tag（如 v0.11.x-fix），计算从该 tag 起的 commit 数 N
-      #   4. 新 versionCode = BASE_CODE + N；新 versionName = BASE_VERSION 不变
-      #   5. 写回 build.gradle.kts，使源码与构建产物版本号同步
-      - name: Auto-determine version and bump build.gradle.kts
+      - name: Determine version
         id: version
         run: |
           set -euo pipefail
+          PKG='app/build.gradle.kts'
 
-          # ── 阶段 1：确定最终版本号 ──────────────────────────────────
           if [[ -n "${{ inputs.version_override }}" ]]; then
-            # 手动覆盖：直接使用传入的值，versionCode 可选覆盖
             VERSION_NAME="${{ inputs.version_override }}"
-            if [[ -n "${{ inputs.version_code_override }}" ]]; then
-              VERSION_CODE="${{ inputs.version_code_override }}"
-            else
-              # 没有明确 versionCode：取 gradle 当前值 +1
-              CURRENT_CODE=$(grep -oE 'versionCode\s*=\s*[0-9]+' app/build.gradle.kts | grep -oE '[0-9]+')
-              VERSION_CODE=$(( CURRENT_CODE + 1 ))
-            fi
-            echo "使用手动覆盖版本: $VERSION_NAME (code=$VERSION_CODE)"
+            VERSION_CODE="${{ inputs.version_code_override:-$(grep -oE 'versionCode\s*=\s*[0-9]+' $PKG | grep -oE '[0-9]+') }}"
+            echo "手动覆盖版本: $VERSION_NAME (code=$VERSION_CODE)"
           else
-            # 自动计算：从 gradle 读取基准版本，commit 数追加到 code
-            BASE_VERSION=$(grep -oE 'versionName\s*=\s*"[^"]+"' app/build.gradle.kts | grep -oE '"[^"]+"' | tr -d '"')
-            BASE_CODE=$(grep -oE 'versionCode\s*=\s*[0-9]+' app/build.gradle.kts | grep -oE '[0-9]+')
-
-            # 找最近的同类 tag（格式 v<major>.<minor>.<patch>-fix 或 v<major>.<minor>.<patch>）
+            BASE_VERSION=$(grep -oE 'versionName\s*=\s*"[^"]+"' $PKG | grep -oE '"[^"]+"' | tr -d '"')
+            BASE_CODE=$(grep -oE 'versionCode\s*=\s*[0-9]+' $PKG | grep -oE '[0-9]+')
             RECENT_TAG=$(git tag --sort=-version:refname \
               | grep -E "^v${BASE_VERSION/./\\.}" \
               | head -1 \
               || git tag --sort=-creatordate | grep -E "^v[0-9]+\.[0-9]+\.[0-9]+" | head -1 \
               || echo "")
-
             if [[ -n "$RECENT_TAG" ]]; then
-              # 从最近同类 tag 算起（允许重复构建：tag 内多次 push 递增 code）
               COMMITS_SINCE=$(git rev-list --count "${RECENT_TAG}..HEAD")
             else
-              # 无匹配 tag，从仓库起点算起
               COMMITS_SINCE=$(git rev-list --count HEAD)
             fi
-
             VERSION_NAME="$BASE_VERSION"
             VERSION_CODE=$(( BASE_CODE + COMMITS_SINCE ))
             echo "自动计算版本: $VERSION_NAME (code=$VERSION_CODE, 基准=$BASE_CODE, 增量=$COMMITS_SINCE, tag=$RECENT_TAG)"
           fi
 
-          # ── 阶段 2：写回 build.gradle.kts ────────────────────────────
-          # 用 sed 精确替换版本行，避免破坏其他内容
+          # 写回 build.gradle.kts
           sed -i \
             -e "s/versionCode\s*=\s*[0-9]\+/versionCode = ${VERSION_CODE}/" \
             -e "s/versionName\s*=\s*\"[^\"]*\"/versionName = \"${VERSION_NAME}\"/" \
-            app/build.gradle.kts
-
-          # 验证写入成功
-          NEW_NAME=$(grep -oE 'versionName\s*=\s*"[^"]+"' app/build.gradle.kts | grep -oE '"[^"]+"' | tr -d '"')
-          NEW_CODE=$(grep -oE 'versionCode\s*=\s*[0-9]+' app/build.gradle.kts | grep -oE '[0-9]+')
-          if [[ "$NEW_NAME" != "$VERSION_NAME" ]] || [[ "$NEW_CODE" != "$VERSION_CODE" ]]; then
-            echo "错误：版本写入失败" >&2
-            exit 1
-          fi
-
+            $PKG
           echo "version_name=${VERSION_NAME}" >> $GITHUB_OUTPUT
           echo "version_code=${VERSION_CODE}" >> $GITHUB_OUTPUT
           echo "tag=v${VERSION_NAME}" >> $GITHUB_OUTPUT
-          echo "base_version=${BASE_VERSION:-unknown}" >> $GITHUB_OUTPUT
 
-      # 将更新后的 build.gradle.kts 推回仓库，确保下次构建读取到最新的 BASE_CODE
-      # （否则每次构建都从同一个 BASE_CODE 重新计算 → versionCode 重复）
       - name: Commit and push bumped version back to repo
         if: inputs.version_override == ''
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add app/build.gradle.kts
-          if git diff --cached --quiet; then
-            echo "版本无变化，跳过提交"
-          else
+          if ! git diff --cached --quiet; then
             git commit -m "chore: bump versionCode to ${{ steps.version.outputs.version_code }} (auto)"
             git push origin main || echo "推送失败（可能已有其他提交），跳过"
             echo "已推送 versionCode=${{ steps.version.outputs.version_code }}"
+          else
+            echo "版本无变化，跳过提交"
           fi
 
       - name: Show bumped gradle
+        run: grep -n "versionCode\|versionName" app/build.gradle.kts
+
+    outputs:
+      version_name: ${{ steps.version.outputs.version_name }}
+      version_code: ${{ steps.version.outputs.version_code }}
+      tag: ${{ steps.version.outputs.tag }}
+
+  # ── 阶段 2：按架构构建 APK ────────────────────────────────────────────────
+  build:
+    name: Build APK (${{ matrix.arch }})
+    needs: [version]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: ${{ (inputs.apk_arch == 'all' || github.event_name == 'push') && fromJSON('["arm64","x86_64"]') || fromJSON('["' inputs.apk_arch '"]') }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: ${{ env.DISTRIBUTION }}
+          cache: gradle
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Download snapshot (${{ matrix.arch }})
         run: |
-          echo "=== build.gradle.kts 版本 ==="
-          grep -n "versionCode\|versionName" app/build.gradle.kts
+          SNAPSHOT_URL="${{ inputs.snapshot_url }}"
+          if [[ -z "$SNAPSHOT_URL" ]]; then
+            # 从 v1.0 release 自动下载对应架构快照
+            SNAPSHOT_URL="https://github.com/${{ github.repository }}/releases/download/${{ env.RELEASE_TAG }}/snapshot-${{ matrix.arch }}.tar.xz"
+          fi
+          mkdir -p app/src/main/assets
+          echo "下载快照: $SNAPSHOT_URL"
+          curl -L --progress-bar -o app/src/main/assets/snapshot.tar.xz "$SNAPSHOT_URL"
+          echo "快照大小:"
+          ls -lh app/src/main/assets/snapshot.tar.xz
 
       - name: Grant execute permission
         run: chmod +x gradlew
@@ -159,16 +161,16 @@ jobs:
       - name: Upload APK to Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.version.outputs.tag }}
-          name: ${{ steps.version.outputs.tag }}
+          tag_name: ${{ needs.version.outputs.tag }}
+          name: ${{ needs.version.outputs.tag }}
           files: ${{ steps.apk.outputs.apk_path }}
           body: |
-            ## ${{ steps.version.outputs.tag }} Release
+            ## ${{ needs.version.outputs.tag }} Release
 
             ### 📦 版本信息
-            - 版本: ${{ steps.version.outputs.version_name }}
-            - Build Code: ${{ steps.version.outputs.version_code }}
-            - 快照: x86_64
+            - 版本: ${{ needs.version.outputs.version_name }}
+            - Build Code: ${{ needs.version.outputs.version_code }}
+            - 快照: ${{ matrix.arch }}
 
             ### 📋 安装
             1. 下载附件中的 APK
@@ -181,12 +183,13 @@ jobs:
             \`\`\`
           draft: false
           prerelease: false
+          # 同一个 release tag 多次上传不会冲突
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload APK as Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: deepseek-harness-${{ steps.version.outputs.version_name }}
+          name: deepseek-harness-${{ needs.version.outputs.version_name }}-${{ matrix.arch }}
           path: ${{ steps.apk.outputs.apk_path }}
           retention-days: 30
