@@ -168,18 +168,21 @@ class EnvManager(private val context: Context) {
 
   /** 与 EngineManager.startEngine 同款运行时 env（保证快照内命令可 exec）。 */
   private fun runtimeEnv(): Map<String, String> {
-    val preload = File(usrDir, "lib/libtermux-exec-ld-preload.so")
-    return mapOf(
+    val preload = RuntimePermissions.resolveTermuxExecPreload(usrDir)
+    val env = mutableMapOf(
       "PATH" to (usrDir.absolutePath + "/bin:/system/bin"),
       "LD_LIBRARY_PATH" to (usrDir.absolutePath + "/lib"),
       "HOME" to homeDir.absolutePath,
-      "LD_PRELOAD" to preload.absolutePath,
       "TERMUX_EXEC__SYSTEM_LINKER_EXEC__MODE" to "force",
       "TERMUX_EXEC__EXECVE_CALL__INTERCEPT" to "1",
-      "TERMUX__ROOTFS" to usrDir.parentFile.absolutePath,
+      "TERMUX__ROOTFS" to (usrDir.parentFile?.absolutePath ?: usrDir.parent ?: context.filesDir.absolutePath),
       "TERMUX__PREFIX" to usrDir.absolutePath,
       "TERMUX_VERSION" to "0.118.3",
     )
+    if (preload != null) {
+      env["LD_PRELOAD"] = preload.absolutePath
+    }
+    return env
   }
 
   companion object {

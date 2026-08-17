@@ -76,6 +76,23 @@ object SnapshotExtractor {
     stampExecAttribute(execFiles)
     // 兜底：对 usr/bin 及关键 usr/lib 补设 exec 位 + Android exec 属性（幂等）。
     RuntimePermissions.ensureExecutable(File(dest, "usr"))
+    assertCriticalFilesPresent(dest)
+  }
+
+  private fun assertCriticalFilesPresent(dest: File) {
+    val usr = File(dest, "usr")
+    val problems = mutableListOf<String>()
+    val preload = RuntimePermissions.resolveTermuxExecPreload(usr)
+    if (preload == null || !preload.exists() || preload.length() == 0L) {
+      problems.add("usr/lib/libtermux-exec*-ld-preload*.so 缺失或 0 字节")
+    }
+    val node = File(usr, "bin/node")
+    if (!node.exists() || node.length() == 0L) problems.add("usr/bin/node 缺失或 0 字节")
+    val binJs = File(usr, "lib/node_modules/@deepseek-ai/dsh/lib/bin.js")
+    if (!binJs.exists() || binJs.length() == 0L) problems.add("dsh bin.js 缺失或 0 字节")
+    if (problems.isNotEmpty()) {
+      throw IllegalStateException("解压后关键文件缺失/损坏: " + problems.joinToString("; "))
+    }
   }
 
   /** Stamp the Android exec attribute on all extracted executables. */

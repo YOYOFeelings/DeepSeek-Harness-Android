@@ -200,6 +200,7 @@ class UpdateManager(private val context: Context) {
       var downloadAttempted = false
       var downloadSizeLabel = ""
       var downloadMirrorName = ""
+      var updateInProgressFile: File? = null
       try {
         // 候选源顺序：当前激活源优先，其余按内置+自定义顺序回退。
         val mirrors = candidateMirrors()
@@ -286,12 +287,30 @@ class UpdateManager(private val context: Context) {
         // 防止不同设备/不同快照下新 usr/bin 无 exec 位 → 更新后无法运行。
         RuntimePermissions.ensureExecutable(newUsr)
 
+        updateInProgressFile = File(context.filesDir, ".update-in-progress")
+        try { updateInProgressFile?.writeText(sha) } catch (_: Throwable) {}
         onStage("切换", "切换运行时…")
         val usr = File(context.filesDir, "usr")
         val old = File(context.filesDir, "usr-old")
         deleteRecursively(old)
         if (usr.exists()) usr.renameTo(old)
         if (!newUsr.renameTo(usr)) throw IllegalStateException("切换失败")
+        val switchedOk = try {
+          val swPreload = RuntimePermissions.resolveTermuxExecPreload(usr)
+          val swNode = File(usr, "bin/node")
+          val swBinJs = File(usr, "lib/node_modules/@deepseek-ai/dsh/lib/bin.js")
+          val probs = mutableListOf<String>()
+          if (swPreload == null || !swPreload.exists() || swPreload.length() == 0L) probs.add("termux-exec 缺失/0字节")
+          if (!swNode.exists() || swNode.length() == 0L) probs.add("node 缺失/0字节")
+          if (!swBinJs.exists() || swBinJs.length() == 0L) probs.add("bin.js 缺失/0字节")
+          probs.isEmpty()
+        } catch (_: Throwable) { false }
+        if (!switchedOk) {
+          runCatching { usr.deleteRecursively() }
+          runCatching { if (old.exists()) old.renameTo(usr) }
+          runCatching { deleteRecursively(stage) }
+          throw IllegalStateException("切换后关键文件断言失败，已回滚到旧 usr")
+        }
         deleteRecursively(stage)
         deleteRecursively(old)
 
@@ -304,6 +323,7 @@ class UpdateManager(private val context: Context) {
         // 在线更新标记：优先级高于内嵌指纹，防止下次启动误判"快照过期"而
         // 重解压 assets 快照，把在线更新覆盖回出厂。
         File(context.filesDir, ".snapshot-online").writeText(sha)
+        runCatching { updateInProgressFile?.delete() }
         DownloadHistory.add(
           context,
           DownloadHistory.Record(
@@ -331,6 +351,7 @@ class UpdateManager(private val context: Context) {
             ),
           )
         }
+        runCatching { updateInProgressFile?.delete() }
         onStage("失败", "更新失败：" + (t.message ?: t.javaClass.simpleName))
       }
       } finally {

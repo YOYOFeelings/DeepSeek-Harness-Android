@@ -56,12 +56,28 @@ class EngineService : Service() {
           if (!EngineManager.webActive && engineManager.engineReady) {
             if (EngineProbe.check(timeoutMs = 2000).optBoolean("running", false)) {
               failStreak = 0
+              crashStreak = 0
             } else {
               failStreak++
               if (failStreak >= 3) {
                 failStreak = 0
-                // force=true：端口已释放才重启；STARTING CAS 仍防并发双启动。
-                engineManager.startEngine(force = true)
+                val now2 = System.currentTimeMillis()
+                val sinceStart = now2 - lastForceStartAt
+                if (lastForceStartAt != 0L && sinceStart < 30_000L) {
+                  crashStreak++
+                } else {
+                  crashStreak = 0
+                }
+                val backoffMs = 5_000L * (1L shl (crashStreak.coerceAtMost(5)))
+                val effectiveBackoff = if (crashStreak >= 6) 120_000L else backoffMs
+                if (sinceStart < effectiveBackoff) {
+                  if (crashStreak >= 6) {
+                    Logs.append(Logs.engineLog(this@EngineService), "连续闪退，看门狗已限流到 120s 间隔 crashStreak=$crashStreak")
+                  }
+                } else {
+                  lastForceStartAt = now2
+                  engineManager.startEngine(force = true)
+                }
               }
             }
           }
@@ -72,6 +88,7 @@ class EngineService : Service() {
     if (!EngineManager.webActive && engineManager.engineReady &&
       !EngineProbe.check(timeoutMs = 2000).optBoolean("running", false)
     ) {
+      lastForceStartAt = System.currentTimeMillis()
       engineManager.startEngine(force = true)
     }
   }
@@ -99,5 +116,8 @@ class EngineService : Service() {
 
     /** 看门狗连续探测失败计数（>=3 才重启，容忍引擎短暂繁忙）。 */
     @Volatile private var failStreak = 0
+
+    @Volatile private var crashStreak = 0
+    @Volatile private var lastForceStartAt = 0L
   }
 }

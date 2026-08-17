@@ -39,6 +39,8 @@ class EngineManager(private val context: Context, private val pickToken: String?
   private val dshBin = File(usrDir, "lib/node_modules/@deepseek-ai/dsh/lib/bin.js")
   private var engineProcess: Process? = null
 
+  val engineProcessHandle: Process? get() = engineProcess
+
   val engineReady: Boolean get() = nodeBin.exists()
 
   /** 内嵌快照指纹（assets/snapshot.sha256，由 build-release.ps1 生成）。 */
@@ -142,6 +144,17 @@ class EngineManager(private val context: Context, private val pickToken: String?
       }
       restoreUserData(backup, dsh)
       backup.deleteRecursively()
+      val afterOk = run {
+        val p = RuntimePermissions.resolveTermuxExecPreload(usrDir)
+        val n = nodeBin
+        val bj = File(usrDir, "lib/node_modules/@deepseek-ai/dsh/lib/bin.js")
+        (p != null && p.exists() && p.length() > 0) && n.exists() && n.length() > 0 && bj.exists() && bj.length() > 0
+      }
+      if (!afterOk) {
+        restoreUserData(backup, dsh)
+        Log.e(TAG, "refreshSnapshot: extract succeeded but post-assert failed; kept old runtime")
+        return false
+      }
       fingerprintFile().writeText(bundledFingerprint())
       Log.i(TAG, "snapshot refreshed (fingerprint " + bundledFingerprint().take(12) + ")")
       return true
@@ -423,6 +436,101 @@ class EngineManager(private val context: Context, private val pickToken: String?
     }
   }
 
+  /** 关键文件三重校验：存在性+非零大小+可执行权限(exec位)；返回问题描述列表（空 = 全部通过）。 */
+  fun verifyCriticalFiles(): List<String> {
+    val problems = mutableListOf<String>()
+    // termux-exec（通配解析）
+    val preload = RuntimePermissions.resolveTermuxExecPreload(usrDir)
+    if (preload == null || !preload.exists() || preload.length() == 0L) {
+      problems.add("termux-exec preload: 缺失或 0 字节")
+    } else if (!preload.canExecute()) {
+      problems.add("termux-exec preload: 无 exec 位")
+    }
+    // node
+    if (!nodeBin.exists()) problems.add("usr/bin/node: 缺失")
+    else if (nodeBin.length() == 0L) problems.add("usr/bin/node: 0 字节")
+    else if (!nodeBin.canExecute()) problems.add("usr/bin/node: 无 exec 位")
+    // bin.js（仅检查存在与大小，不需 exec 位）
+    val binJs = File(usrDir, "lib/node_modules/@deepseek-ai/dsh/lib/bin.js")
+    if (!binJs.exists()) problems.add("dsh bin.js: 缺失")
+    else if (binJs.length() == 0L) problems.add("dsh bin.js: 0 字节")
+    return problems
+  }
+
+  /** 分层自愈：
+   *  level>=1: RuntimePermissions.ensureExecutable + 强制 resolveTermuxExecPreload 命名修复（resolve 内部已做软链/复制）
+   *  level>=2: 从 nativeLibraryDir 尝试拷贝 libtermux_exec_ld_preload.so → lib/libtermux-exec-ld-preload.so
+   *  level>=3: 单独重解压内嵌 assets 快照的 usr/lib/ 子树（不触碰 home/.dsh）
+   *  返回 true=当前层级执行后 verifyCriticalFiles 通过；false=仍不通过
+   */
+  fun selfHealCriticalFiles(level: Int): Boolean {
+    if (level >= 1) try { RuntimePermissions.ensureExecutable(usrDir) } catch (_: Throwable) {}
+    if (level >= 1) RuntimePermissions.resolveTermuxExecPreload(usrDir)
+    if (level >= 2) try { copyPreloadFromNativeLibs() } catch (_: Throwable) {}
+    if (level >= 3) try { reextractUsrLibOnly() } catch (_: Throwable) {}
+    if (level >= 3) try { RuntimePermissions.ensureExecutable(usrDir) } catch (_: Throwable) {}
+    return verifyCriticalFiles().isEmpty()
+  }
+
+  private fun copyPreloadFromNativeLibs() {
+    val nativeDir = File(context.applicationInfo.nativeLibraryDir)
+    if (!nativeDir.exists()) return
+    val candidates = nativeDir.listFiles()?.filter {
+      val n = it.name
+      it.isFile && it.length() > 0 &&
+        (n.startsWith("libtermux_exec") || n.startsWith("libtermux-exec")) &&
+        n.contains("ld-preload") && n.endsWith(".so")
+    }.orEmpty()
+    val source = candidates.firstOrNull() ?: return
+    val dest = File(usrDir, "lib/libtermux-exec-ld-preload.so")
+    dest.parentFile?.mkdirs()
+    try { source.copyTo(dest, overwrite = true) } catch (_: Throwable) {}
+  }
+
+  /** 仅从内嵌快照重解压 usr/lib/ 子树，不触碰 home/.dsh。失败静默返回。 */
+  private fun reextractUsrLibOnly() {
+    try {
+      val fd = context.assets.openFd("snapshot.tar.xz")
+      val input = context.assets.open("snapshot.tar.xz")
+      val xz = XZCompressorInputStream(input)
+      val tar = TarArchiveInputStream(xz)
+      val destLib = File(usrDir, "lib").apply { mkdirs() }
+      var entry: TarArchiveEntry? = tar.nextEntry
+      while (entry != null) {
+        if (entry.name.startsWith("usr/lib/")) {
+          val stripped = entry.name.removePrefix("usr/lib/")
+          val target = File(destLib, stripped)
+          when {
+            entry.isDirectory -> target.mkdirs()
+            entry.isSymbolicLink -> {
+              target.parentFile?.mkdirs()
+              try { Files.deleteIfExists(target.toPath()) } catch (_: Throwable) {}
+              try {
+                Files.createSymbolicLink(target.toPath(), java.nio.file.Paths.get(entry.linkName))
+              } catch (_: Throwable) {}
+            }
+            else -> {
+              target.parentFile?.mkdirs()
+              target.outputStream().use { out ->
+                val buf = ByteArray(64*1024); var n = tar.read(buf)
+                while (n >= 0) { out.write(buf,0,n); n = tar.read(buf) }
+              }
+              val inUsrLib = true
+              val isExec = (entry.mode and 0x49) != 0 || inUsrLib
+              target.setExecutable(isExec, true)
+            }
+          }
+        } else {
+          val skip = entry.size
+          if (skip > 0) tar.skip(skip)
+        }
+        entry = tar.nextEntry
+      }
+      tar.close()
+      RuntimePermissions.ensureExecutable(usrDir)
+    } catch (_: Throwable) { }
+  }
+
   /**
    * Start the dsh web engine from the embedded snapshot.
    * @param port 引擎监听端口。
@@ -430,66 +538,65 @@ class EngineManager(private val context: Context, private val pickToken: String?
    *              为 false 时遵循冷却窗口（EngineService 看门狗用，防慢启动竞态）。
    */
   fun startEngine(port: Int = 3080, force: Boolean = false): Boolean {
-    // 跨设备自愈：启动前兜底补设 usr/bin 可执行权限与 Android exec 属性（幂等、失败不阻断）。
-    try {
-      RuntimePermissions.ensureExecutable(usrDir)
-    } catch (_: Throwable) {
+    try { RuntimePermissions.ensureExecutable(usrDir) } catch (_: Throwable) {}
+
+    var problems = verifyCriticalFiles()
+    if (problems.isNotEmpty()) {
+      Logs.append(Logs.engineLog(context), "[启动前校验] 发现问题: " + problems.joinToString(";"))
+      val levels = intArrayOf(1, 2, 3)
+      for (lv in levels) {
+        val ok = selfHealCriticalFiles(lv)
+        val after = verifyCriticalFiles()
+        Logs.append(Logs.engineLog(context), "[启动前自愈] level=$lv 通过?=$ok 剩余问题=" + after.joinToString(";"))
+        if (after.isEmpty()) break
+        problems = after
+      }
     }
-    // LD_PRELOAD 依赖快照内的 termux-exec 库：缺失时所有子进程 exec 会失败，
-    // 且叠加冷却窗口 = 引擎静默停摆 90s——启动前显式断言，缺失即 loud fail。
-    val preload = File(usrDir, "lib/libtermux-exec-ld-preload.so")
-    if (!preload.exists()) {
-      Log.e(TAG, "engine start failed: termux-exec preload missing at " + preload.absolutePath)
-      Logs.append(Logs.engineLog(context), "termux-exec preload 缺失: " + preload.absolutePath)
-      Logs.logE(context, TAG, "termux-exec preload 缺失: " + preload.absolutePath)
+
+    if (!nodeBin.exists()) {
+      Log.e(TAG, "engine start failed: usr/bin/node 缺失（致命）")
+      Logs.append(Logs.engineLog(context), "startEngine 致命失败: usr/bin/node 缺失，自愈 3 层后仍不存在")
+      Logs.logE(context, TAG, "startEngine 致命失败: usr/bin/node 缺失")
       return false
     }
+
+    val preload = RuntimePermissions.resolveTermuxExecPreload(usrDir)
+    val degradedMode = preload == null
+    if (degradedMode) {
+      val w = "[WARN] 降级模式启动（termux-exec 钩子未注入，部分子进程 exec 可能失败）"
+      Log.e(TAG, w)
+      Logs.append(Logs.engineLog(context), w)
+      Logs.logE(context, TAG, w)
+    }
+
     val now = System.currentTimeMillis()
-    // 进程级 CAS：并发调用只有一个能真正启动（设备实证 EADDRINUSE 双启动）。
     if (!STARTING.compareAndSet(false, true)) return true
-    // 冷却窗口：非 force 时上次尝试后 90s 内不重复启动（冷启动 boot 需 20-45s）。
-    // 命中冷却直接返回 false——调用方应视为"本次未真正启动"，可据实提示/重试，
-    // 而不是误报成功（否则引擎进程已死时会在 90s 内反复假成功导致"无法启动"）。
     if (!force && now - EngineManager.lastStartAttemptAt < START_COOLDOWN_MS) {
-      STARTING.set(false)
-      return false
+      STARTING.set(false); return false
     }
+
     return try {
-      val args = arrayOf(
-        nodeBin.absolutePath, "--expose-internals", dshBin.absolutePath, "web", "--port", port.toString(),
-      )
-      val env = mapOf(
+      val args = arrayOf(nodeBin.absolutePath, "--expose-internals",
+        File(usrDir, "lib/node_modules/@deepseek-ai/dsh/lib/bin.js").absolutePath,
+        "web", "--port", port.toString())
+      val env = mutableMapOf(
         "PATH" to (usrDir.absolutePath + "/bin:/system/bin"),
         "LD_LIBRARY_PATH" to (usrDir.absolutePath + "/lib"),
         "HOME" to homeDir.absolutePath,
-        // DSH_HOME 始终保持在私有域（FUSE 禁 symlink，公共域无法维护
-        // profiles/node_modules flat fallback）；运行时用户数据全部在私有
-        // files/home/.dsh，公共 Documents/dshdata 仅作导出仓库。
         "DSH_HOME" to ensurePrivateDshData().absolutePath,
-        // os.tmpdir() falls back to the baked-in Termux tmp on Android
-        // (unwritable from the app domain); keep spill inside filesDir.
         "TMPDIR" to File(homeDir, "tmp").apply { mkdirs() }.absolutePath,
-        // Android 16 forbids exec of app-data ELF regardless of targetSdk
-        // (observed on Android 16/vivo: direct exec EACCES even at targetSdk
-        // 34). Termux's execve hook re-routes denied execs through
-        // /system/bin/linker64 (same mechanism as JNI libs); the snapshot
-        // ships libtermux-exec-*-ld-preload.so. The hook only rewrites for
-        // untrusted_app_25/27 SELinux domains, so force mode is required.
-        "LD_PRELOAD" to preload.absolutePath,
         "TERMUX_EXEC__SYSTEM_LINKER_EXEC__MODE" to "force",
-        "TERMUX_EXEC__EXECVE_CALL__INTERCEPT" to "1",
-        "TERMUX__ROOTFS" to context.filesDir.absolutePath,
+        "TERMUX_EXEC__EXECVE_CALL__INTERCEPT" to if (degradedMode) "0" else "1",
+        "TERMUX__ROOTFS" to (usrDir.parentFile?.absolutePath ?: context.filesDir.absolutePath),
         "TERMUX__PREFIX" to usrDir.absolutePath,
-        "TERMUX_APP__DATA_DIR" to context.filesDir.parentFile!!.absolutePath,
+        "TERMUX_APP__DATA_DIR" to (context.filesDir.parentFile?.absolutePath ?: "/data/data/com.dshmobile.shell"),
         "TERMUX_APP__LEGACY_DATA_DIR" to "/data/data/com.dshmobile.shell",
         "TERMUX_VERSION" to "0.118.3",
-        // 目录选择桥端点鉴权 token（web-compat 插件校验 x-dsh-pick-token）。
         "DSH_PICK_TOKEN" to (pickToken ?: ""),
       )
+      if (preload != null) env["LD_PRELOAD"] = preload.absolutePath
       engineProcess = startWithArgs(args, env)
-      // 冷却只在真实启动后写入：失败路径不占用冷却窗口（可立即重试）。
       EngineManager.lastStartAttemptAt = now
-      // 真实启动时刻：主页状态卡运行时长基准（手动停止/重启后自动归零）。
       EngineManager.lastStartedAt = now
       true
     } catch (t: Throwable) {

@@ -249,6 +249,44 @@ class MainActivity : ComponentActivity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    // 全局崩溃兜底：崩溃前先写诊断上下文到 exceptions.log，再转发给系统原 handler
+    runCatching {
+      val prev = Thread.getDefaultUncaughtExceptionHandler()
+      Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+        try {
+          val sb = StringBuilder()
+          sb.append("===== ").append(java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date())).append(" =====\n")
+          sb.append("thread: ").append(thread.name).append(" id=").append(thread.id).append('\n')
+          sb.append("message: ").append(throwable.message ?: "(no message)").append('\n')
+          // 诊断上下文：引擎状态快照 + 关键文件
+          runCatching {
+            val em = engineManager
+            val usr = File(filesDir, "usr")
+            val preload = RuntimePermissions.resolveTermuxExecPreload(usr)
+            sb.append("SDK=").append(Build.VERSION.SDK_INT).append(" ABI=").append(Build.SUPPORTED_ABIS.joinToString()).append('\n')
+            sb.append("snapshotFresh=").append(em.snapshotFresh()).append('\n')
+            sb.append("nodeArchMatchesDevice=").append(em.nodeArchMatchesDevice()).append('\n')
+            sb.append("lastStartAttemptAt=").append(EngineManager.lastStartAttemptAt).append('\n')
+            sb.append("lastStartedAt=").append(EngineManager.lastStartedAt).append('\n')
+            sb.append("termux-exec preload=").append(preload?.absolutePath ?: "(null)").append(" size=").append(preload?.length() ?: -1).append('\n')
+            sb.append("usr/bin/node exists=").append(File(usr, "bin/node").exists()).append(" size=").append(File(usr, "bin/node").length()).append('\n')
+            val dshBin = File(usr, "lib/node_modules/@deepseek-ai/dsh/lib/bin.js")
+            sb.append("dsh/bin.js exists=").append(dshBin.exists()).append(" size=").append(dshBin.length()).append('\n')
+            val up = File(filesDir, ".update-in-progress")
+            sb.append(".update-in-progress=").append(up.exists()).append('\n')
+          }
+          sb.append("stacktrace:\n")
+          val sw = java.io.StringWriter()
+          throwable.printStackTrace(java.io.PrintWriter(sw))
+          sb.append(sw.toString()).append('\n')
+          val log = Logs.exceptionsLog(this@MainActivity)
+          log.parentFile?.mkdirs()
+          log.appendText(sb.toString())
+        } catch (_: Throwable) { /* 写日志失败不应再抛出第二波崩溃 */ }
+        // 原封不动转发给系统：保持崩溃语义，绝不吞异常
+        prev?.uncaughtException(thread, throwable)
+      }
+    }
     rootFrame = FrameLayout(this)
     contentFrame = FrameLayout(this)
     homeScreen = HomeScreen(this, object : HomeScreen.Callbacks {
@@ -934,7 +972,11 @@ class MainActivity : ComponentActivity() {
    *  满足「引擎启动错误时弹窗显示详细错误日志报告并支持下载」。 */
   private fun showEngineFailureDialog(reason: String) {
     val tail = engineManager.engineLogTail(60)
+    val degradedHint = if (tail.contains("降级模式") || tail.contains("degraded"))
+      I18n.t(this, "⚠️ 本次为降级模式启动（termux-exec 钩子未注入）\n", "⚠️ Started in degraded mode (termux-exec hook not injected)\n")
+    else ""
     val report = buildString {
+      append(degradedHint)
       append(I18n.t(this@MainActivity, "引擎启动失败：", "Engine failed to start: ")).append(reason).append('\n').append('\n')
       append("Android ").append(Build.VERSION.RELEASE).append(" / SDK ").append(Build.VERSION.SDK_INT).append('\n')
       append(I18n.t(this@MainActivity, "设备 ABI：", "Device ABI: "))
@@ -1013,6 +1055,37 @@ class MainActivity : ComponentActivity() {
     )
   }
 
+  /** 若发现 .update-in-progress 标记，执行安全启动自检（三重校验 + Level 3 自愈），
+   *  终端输出进度；返回 true=标记存在且进入自检（调用方应跳过本轮 auto-start engine），false=正常启动。
+   *  若标记存在但最终 EngineProbe.running=true，或自检已结束（通过/失败），调用方后续在成功路径再 delete 标记。 */
+  private fun maybeSafeBootSelfCheck(term: TerminalView, onHealed: () -> Unit): Boolean {
+    val marker = File(filesDir, ".update-in-progress")
+    if (!marker.exists()) return false
+    term.appendLine("[安全启动] 检测到上一次更新未完成启动确认，正在自检关键运行时文件…")
+    Thread {
+      // 三重校验 → Level 3 自愈 → 再次校验
+      val before = engineManager.verifyCriticalFiles()
+      if (before.isNotEmpty()) {
+        term.appendLine("[安全启动] 首次校验: " + before.joinToString("; "))
+      }
+      val healed = engineManager.selfHealCriticalFiles(3)
+      term.appendLine("[安全启动] 最高自愈后校验通过?=$healed")
+      if (healed) {
+        onHealed()
+      } else {
+        val after = engineManager.verifyCriticalFiles()
+        term.appendLine("[安全启动] 自检失败，仍有问题：" + after.joinToString("; "))
+        runOnUiThread {
+          appendEngineDiagnostics(term)
+          updateEngineStatus(false, "")
+          showEngineFailureDialog("更新后安全启动自检失败")
+        }
+        runCatching { marker.delete() } // 不留下永远卡住的标记（进入失败分支）
+      }
+    }.start()
+    return true
+  }
+
   /** 进入终端主页并确保引擎运行。 */
   private fun enterTerminal() {
     terminalScreen.terminal().appendLine(I18n.t(this, "===== dsh 终端 =====", "===== dsh terminal ====="))
@@ -1025,6 +1098,11 @@ class MainActivity : ComponentActivity() {
       return
     }
     Thread {
+      val safeBoot = maybeSafeBootSelfCheck(terminalScreen.terminal()) {
+        // 自愈通过后按正常流程再次尝试启动
+        runOnUiThread { startEngineFlow() }
+      }
+      if (safeBoot) return@Thread
       val running = EngineProbe.check().optBoolean("running", false)
       runOnUiThread {
         if (running) {
@@ -1064,19 +1142,43 @@ class MainActivity : ComponentActivity() {
    *  @param showErrorDialog 失败时是否弹详细错误报告框（引导管线用 onBootstrapFatal，传 false）。
    *  @return true=就绪；false=超时/失败（日志已追加到终端）。 */
   private fun startEngineWithStreaming(term: TerminalView, showErrorDialog: Boolean = true): Boolean {
-    if (!engineManager.startEngine(force = true)) {
-      term.appendLine("引擎启动失败")
+    var attempt = 0
+    var startOk = engineManager.startEngine(force = true)
+    while (!startOk && attempt < 2) {
+      attempt++
+      val level = if (attempt == 1) 1 else 3
+      term.appendLine("自愈启动：第 ${attempt}/2 次，步骤=${if (level==1) "补权限/命名修复" else "重解压 usr/lib 子树"} …")
+      try { engineManager.selfHealCriticalFiles(level) } catch (_: Throwable) {}
+      startOk = engineManager.startEngine(force = true)
+    }
+    if (!startOk) {
+      term.appendLine("引擎启动失败（已自愈重试 2 次）")
       appendEngineDiagnostics(term)
       updateEngineStatus(false, "")
-      if (showErrorDialog) showEngineFailureDialog("startEngine 返回 false")
+      if (showErrorDialog) showEngineFailureDialog("startEngine 返回 false（已自愈重试 2 次）")
       return false
     }
+    val engineLaunchMs = System.currentTimeMillis()
     var started = false
+    var crashReported = false
     for (i in 0..180) {
+      val ep = engineManager.engineProcessHandle
+      val now = System.currentTimeMillis()
+      if (ep != null && !ep.isAlive && !started && now - engineLaunchMs < 30000L && !crashReported) {
+        crashReported = true
+        Logs.append(Logs.engineLog(this), "引擎启动后闪退(<30s)，launchAge=" + (now - engineLaunchMs) + "ms")
+        term.appendLine("引擎启动后闪退(<30s)，launchAge=" + (now - engineLaunchMs) + "ms")
+        appendCrashDiagnostics(term)
+        EngineManager.lastStartedAt = 0
+        EngineManager.lastStartAttemptAt = 0
+      }
       drainEngineLog(term)
       if (EngineProbe.check().optBoolean("running", false)) { started = true; break }
       term.appendProgress("启动引擎", "等待引擎就绪", i.toLong(), 180L)
       Thread.sleep(500)
+    }
+    if (started) {
+      runCatching { File(filesDir, ".update-in-progress").delete() }
     }
     drainEngineLog(term)
     if (!started && showErrorDialog) {
@@ -1090,6 +1192,13 @@ class MainActivity : ComponentActivity() {
    *  解压运行时 → 写 dsh 配置 → 在线更新（架构不符时为必须，否则失败不阻断）
    *  → 启动引擎 → 完成进终端主页。 */
   private fun runBootstrapPipeline(term: TerminalView) {
+    val marker = File(filesDir, ".update-in-progress")
+    if (marker.exists()) {
+      term.appendLine("[安全启动] 检测到上一次更新未完成启动确认，正在自检关键运行时文件…")
+      val before = engineManager.verifyCriticalFiles()
+      if (before.isNotEmpty()) term.appendLine("[安全启动] 首次校验: " + before.joinToString("; "))
+      engineManager.selfHealCriticalFiles(3)
+    }
     // 运行时就绪判定：node 已存在但架构错误时，跳过内嵌重解压（内嵌同样是错的）。
     if (!engineManager.nodeArchMatchesDevice()) {
       term.appendLine("检测到运行时架构与设备不匹配，将在线下载匹配架构…")
@@ -1232,6 +1341,20 @@ class MainActivity : ComponentActivity() {
     }
   }
 
+  private fun appendCrashDiagnostics(term: TerminalView) {
+    val engTail = engineManager.engineLogTail(100)
+    term.appendLine("----- engine.log 最后 100 行 -----")
+    if (engTail.isBlank()) term.appendLine("（无）") else term.appendLine(engTail)
+    term.appendLine("----- engine.log end -----")
+    val exLog = Logs.exceptionsLog(this)
+    val exTail = if (exLog.exists()) try {
+      exLog.readLines().takeLast(50).joinToString("\n")
+    } catch (_: Throwable) { "" } else { "" }
+    term.appendLine("----- exceptions.log 最后 50 行 -----")
+    if (exTail.isBlank()) term.appendLine("（无）") else term.appendLine(exTail)
+    term.appendLine("----- exceptions.log end -----")
+  }
+
   /** 致命失败处理（主线程）：弹重试/跳过对话框（可返回键/点外部关闭）。 */
   private fun onBootstrapFatal(msg: String) {
     runOnUiThread {
@@ -1286,6 +1409,13 @@ class MainActivity : ComponentActivity() {
     if (!engineFlowRunning.compareAndSet(false, true)) return
     Thread {
       try {
+        val term = terminalScreen.terminal()
+        val safeBoot = maybeSafeBootSelfCheck(term) {
+          // 自愈通过后回到正常启动流程（先 snapshotFresh 检查等），这里通过清空 flowRunning 让下一轮重入
+          engineFlowRunning.set(false)
+          runOnUiThread { startEngineFlow() }
+        }
+        if (safeBoot) return@Thread
         if (EngineProbe.check().optBoolean("running", false)) return@Thread
         // 运行时就绪判定：node 已存在但架构错误时，跳过内嵌重解压（内嵌同样是错的）。
         val needArchFix = !engineManager.nodeArchMatchesDevice()

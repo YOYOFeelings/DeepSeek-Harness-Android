@@ -12,6 +12,24 @@ import java.io.File
  */
 object RuntimePermissions {
 
+  /** 统一解析 termux-exec preload 文件：优先硬编码目标；不存在时通配 usr/lib/libtermux-exec*ld-preload*.so；
+   * 若通配命中但目标缺失，复制为目标路径。都无则返回 null。 */
+  fun resolveTermuxExecPreload(usrDir: File): File? {
+    val target = File(usrDir, "lib/libtermux-exec-ld-preload.so")
+    if (target.exists() && target.length() > 0) return target
+    val libDir = File(usrDir, "lib")
+    if (!libDir.exists() || !libDir.isDirectory) return null
+    val matched = libDir.listFiles()?.firstOrNull {
+      val n = it.name
+      it.isFile && it.length() > 0 &&
+        n.startsWith("libtermux-exec") && n.contains("ld-preload") && n.endsWith(".so")
+    } ?: return null
+    try {
+      matched.copyTo(target, overwrite = true)
+      return target.takeIf { it.exists() && it.length() > 0 }
+    } catch (_: Throwable) { return null }
+  }
+
   /** 幂等补设 usr 目录下可执行文件权限与 Android exec 属性。 */
   fun ensureExecutable(usrDir: File) {
     if (!usrDir.exists()) return
@@ -25,10 +43,11 @@ object RuntimePermissions {
         }
       }
     }
-    // 处理关键 lib（termux-exec 等需要可执行的 so）
-    val criticalLibs = listOf(
-      "lib/libtermux-exec-ld-preload.so",
-    )
+    // 处理关键 lib（termux-exec 等需要可执行的 so）：通配解析优先，兜底固定路径
+    val resolvedPath = resolveTermuxExecPreload(usrDir)?.relativeTo(usrDir)?.path
+    val criticalLibs = mutableListOf<String>()
+    if (resolvedPath != null) criticalLibs.add(resolvedPath)
+    if (resolvedPath == null) criticalLibs.add("lib/libtermux-exec-ld-preload.so")
     criticalLibs.forEach { path ->
       val file = File(usrDir, path)
       if (file.exists() && file.isFile) {
