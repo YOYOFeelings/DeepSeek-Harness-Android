@@ -34,8 +34,11 @@ object AnnouncementManager {
         if (body.isBlank()) {
           Logs.logE(context, "announcement", "官方直连无有效公告（失败或返回 HTML），回退镜像源")
           // 2) 镜像回退（加速代理可能返回 Cloudflare/404/挑战页 HTML）。
+          // BUG-3 修复：activeMirror=null（自动模式）时 resolved==URL，等同于重试同一地址。
+          //   改为优先使用第一个内置加速源（akaere）作为回退。
           val um = UpdateManager.forPrefs(context)
-          val resolved = um.activeMirror?.resolve(URL) ?: URL
+          val fallbackMirror = um.builtinMirrors().firstOrNull { it.id != "official" }
+          val resolved = fallbackMirror?.resolve(URL) ?: URL
           body = fetch(resolved)
         }
         if (body.isNotBlank()) {

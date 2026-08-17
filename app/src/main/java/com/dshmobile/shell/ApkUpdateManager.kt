@@ -81,7 +81,9 @@ class ApkUpdateManager(private val context: Context) {
         val head = ByteArray(4)
         if (input.read(head) != 4) return false
         val pk = head[0] == 'P'.code.toByte() && head[1] == 'K'.code.toByte()
-        val ver = (head[2].toInt() and 0xff) in 0x03..0x07 || (head[2].toInt() and 0xff) in 0x01..0x02
+        // BUG-17 修复：ZIP 规范版本字节有效范围 0x00-0x33（51 个版本），
+        //   原代码仅接受 0x01-0x07 可能误拒新版 APK。放宽为 0x00-0x50 覆盖所有已知版本。
+        val ver = (head[2].toInt() and 0xff) in 0x00..0x50
         pk && ver
       }
     } catch (_: Throwable) {
@@ -233,7 +235,8 @@ class ApkUpdateManager(private val context: Context) {
       message = notes,
       iconRes = R.drawable.ic_update,
       actions = actions,
-      cancelable = true,
+      // BUG-10 修复：强制更新不可取消（返回键/点外部均无效）；普通更新保持可取消。
+      cancelable = !forced,
       onCancel = { if (!forced) onDismissed?.invoke() },
     )
   }
