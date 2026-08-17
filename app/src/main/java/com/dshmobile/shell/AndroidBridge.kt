@@ -69,15 +69,17 @@ class AndroidBridge(
 
   /** 配置桥：把 key/value 持久化到 dsh_shell SharedPreferences，返回是否写盘成功。
    *  对 key 做注入防护：长度 ≤ 128、仅允许 [A-Za-z0-9._-]、拒绝 `..`/`/` 与空键，
-   *  防止路径注入/越权键（基线四改法之一）。 */
+   *  防止路径注入/越权键（基线四改法之一）。
+   *  BUG-20 修复：使用 .apply() 替代 .commit()，避免阻塞主线程（Web UI 频繁调用此方法）。 */
   @JavascriptInterface
   fun saveConfig(key: String, value: String): Boolean {
     if (!isSafeConfigKey(key)) {
       Logs.logE(context, "bridge", "saveConfig 拒绝非法键: " + (key ?: "null"))
       return false
     }
-    return context.getSharedPreferences("dsh_shell", android.content.Context.MODE_PRIVATE)
-      .edit().putString(key, value).commit()
+    context.getSharedPreferences("dsh_shell", android.content.Context.MODE_PRIVATE)
+      .edit().putString(key, value).apply()
+    return true
   }
 
   /** 配置桥：读取 dsh_shell SharedPreferences 中的字符串配置（缺失返回空串）。

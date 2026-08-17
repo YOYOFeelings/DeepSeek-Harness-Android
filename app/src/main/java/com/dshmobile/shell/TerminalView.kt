@@ -16,7 +16,7 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * 轻量级“终端模拟”视图：一个 ScrollView 包着单个等宽 TextView，模拟命令行回显。
+ * 轻量级"终端模拟"视图：一个 ScrollView 包着单个等宽 TextView，模拟命令行回显。
  * 全应用唯一的日志面板：引导/安装/更新/引擎输出统一输出到主页终端，不再在多个页面分散。
  *
  * 两个关键设计点：
@@ -43,7 +43,7 @@ class TerminalView(context: Context, private val logFile: File? = null) : Scroll
     setEllipsize(null)
   }
 
-  /** 上一行所属的 stage；配合 [lastLive] 判断是否可以“原地更新”成进度行。 */
+  /** 上一行所属的 stage；配合 [lastLive] 判断是否可以"原地更新"成进度行。 */
   private var lastStage: String? = null
 
   /** 上一行是否是实时进度行（total > 0）。只有连续的同 stage 进度行才能原地覆盖。 */
@@ -80,7 +80,7 @@ class TerminalView(context: Context, private val logFile: File? = null) : Scroll
 
   /**
    * 追加一行带时间戳的详细日志（比 [appendLine] 更详细，便于排查时序问题）。
-   * 格式：`[MM-dd HH:mm:ss] text`。镜像写入 [logFile] 与独立详细日志文件
+   * 格式：`[MM-dd HH:mm:ss] text`。镜像写入 [fileLog] 与独立详细日志文件
    * `terminal-detail.log`。可从任意线程调用（内部 post 到主线程执行）。
    */
   fun appendDetail(text: String) {
@@ -131,7 +131,7 @@ class TerminalView(context: Context, private val logFile: File? = null) : Scroll
       post {
         val replace = lastStage == stage && lastLive
         if (replace) {
-          // 移除上一行：截断到最后一个换行符之前，再追加新进度行，实现“原地刷新”。
+          // 移除上一行：截断到最后一个换行符之前，再追加新进度行，实现"原地刷新"。
           val current = textView.text.toString()
           val lastNl = current.lastIndexOf('\n')
           textView.setText(if (lastNl >= 0) current.substring(0, lastNl) else "")
@@ -146,7 +146,7 @@ class TerminalView(context: Context, private val logFile: File? = null) : Scroll
       val line = "[$stage] $message"
       post {
         textView.append(line + "\n")
-        // 普通行会打断“连续进度行”的判定，后续进度需要另起一行。
+        // 普通行会打断"连续进度行"的判定，后续进度需要另起一行。
         lastStage = null
         lastLive = false
         fullScroll(View.FOCUS_DOWN)
@@ -156,13 +156,24 @@ class TerminalView(context: Context, private val logFile: File? = null) : Scroll
     }
   }
 
-  /** BUG-5 修复：截断终端文本到 MAX_LINES 行，保留末尾最新内容。 */
+  /**
+   * BUG-5 修复：截断终端文本到 MAX_LINES 行，保留末尾最新内容。
+   * BUG-22 修复：同步截断日志文件，防止长时间运行后 terminal.log 无限增长。
+   */
   private fun trimToMaxLines() {
     val text = textView.text.toString()
     val lines = text.lineSequence().toList()
     if (lines.size <= MAX_LINES) return
     val trimmed = lines.takeLast(MAX_LINES).joinToString("\n") + "\n"
     textView.setText(trimmed)
+    // 同步截断日志文件（与内存中 TextView 保持一致）。
+    synchronized(logLock) {
+      try {
+        fileLog.writeText(trimmed)
+      } catch (_: Throwable) {
+        // 日志写入失败不应影响终端显示。
+      }
+    }
   }
 
   /** 清空终端内容和日志文件，并重置进度行跟踪状态。 */

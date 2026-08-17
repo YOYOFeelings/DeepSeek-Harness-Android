@@ -44,6 +44,8 @@ import java.net.URL
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * 壳层 Activity（Flat Minimalist 设计）：启动后直接进入「终端」主页。
@@ -576,8 +578,9 @@ class MainActivity : ComponentActivity() {
       Toast.makeText(this, "链接需以 http:// 或 https:// 开头", Toast.LENGTH_SHORT).show()
       return
     }
-    Thread {
-      val file = performDownloadBackground(url)
+    // BUG-23 修复：改用 lifecycleScope.launch 替代裸 Thread，Activity 销毁时自动取消任务。
+    lifecycleScope.launch {
+      val file = withContext(Dispatchers.IO) { performDownloadBackground(url) }
       runOnUiThread {
         if (file != null) {
           prefs.edit()
@@ -586,12 +589,12 @@ class MainActivity : ComponentActivity() {
             .apply()
           applyBackground()
           if (::settingsScreen.isInitialized) settingsScreen.refreshAppearance()
-          Toast.makeText(this, "背景图片已更新", Toast.LENGTH_SHORT).show()
+          Toast.makeText(this@MainActivity, "背景图片已更新", Toast.LENGTH_SHORT).show()
         } else {
-          Toast.makeText(this, "下载失败", Toast.LENGTH_SHORT).show()
+          Toast.makeText(this@MainActivity, "下载失败", Toast.LENGTH_SHORT).show()
         }
       }
-    }.start()
+    }
   }
 
   /** 随机获取图片并应用为背景：后台依次尝试候选图源，首个成功即应用；全部失败提示。 */
@@ -602,10 +605,11 @@ class MainActivity : ComponentActivity() {
       "https://loremflickr.com/1080/1920",
       "https://loremflickr.com/1920/1080",
     )
-    Thread {
+    // BUG-23 修复：改用 lifecycleScope.launch 替代裸 Thread。
+    lifecycleScope.launch {
       var saved: File? = null
       for (c in candidates) {
-        val f = performDownloadBackground(c)
+        val f = withContext(Dispatchers.IO) { performDownloadBackground(c) }
         if (f != null) { saved = f; break }
       }
       val file = saved
@@ -617,12 +621,12 @@ class MainActivity : ComponentActivity() {
             .apply()
           applyBackground()
           if (::settingsScreen.isInitialized) settingsScreen.refreshAppearance()
-          Toast.makeText(this, "背景图片已更新", Toast.LENGTH_SHORT).show()
+          Toast.makeText(this@MainActivity, "背景图片已更新", Toast.LENGTH_SHORT).show()
         } else {
-          Toast.makeText(this, "随机图片获取失败", Toast.LENGTH_SHORT).show()
+          Toast.makeText(this@MainActivity, "随机图片获取失败", Toast.LENGTH_SHORT).show()
         }
       }
-    }.start()
+    }
   }
 
   /** 启动流程只触发一次（APK 检查/非强制更新弹框关闭后均可能调用）。 */

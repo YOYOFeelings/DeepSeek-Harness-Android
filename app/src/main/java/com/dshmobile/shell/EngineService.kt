@@ -43,6 +43,11 @@ class EngineService : Service() {
       engineManager.stopEngine()
     } catch (_: Throwable) {
     }
+    // BUG-19 修复：前台服务销毁时移除通知栏通知，否则应用关闭后通知永久残留。
+    try {
+      stopForeground(STOP_FOREGROUND_REMOVE)
+    } catch (_: Throwable) {
+    }
     super.onDestroy()
   }
 
