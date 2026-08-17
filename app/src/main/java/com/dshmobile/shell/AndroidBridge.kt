@@ -43,6 +43,13 @@ class AndroidBridge(
     onPickRequest(callbackId)
   }
 
+  /** 当前已选工作区路径（持久化于 dsh_shell prefs，key `workspace_dir`；未选返回空串）。
+   *  供 Web 页面加载后读取并恢复自身工作区（feature-detect 用，页面可自行决定是否采用）。 */
+  @JavascriptInterface
+  fun getWorkspaceDir(): String =
+    context.getSharedPreferences("dsh_shell", android.content.Context.MODE_PRIVATE)
+      .getString("workspace_dir", "") ?: ""
+
   /** 调试日志导出：引擎日志 + 环境信息打包 zip（走会话导出同款下载/弹窗链路）。 */
   @JavascriptInterface
   fun downloadDebugLogs() {

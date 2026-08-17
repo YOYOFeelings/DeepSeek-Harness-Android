@@ -192,6 +192,9 @@ class MainActivity : ComponentActivity() {
       prefs.edit().putString("workspace_dir", path).apply()
       term.appendLine("工作目录已选择: $path")
       term.appendLine("外部工作区由引擎（bash）直接读写该文件夹")
+      // 同步主页/设置页的工作区路径小字（选择后立即显示，重启/更新后也会从 prefs 恢复）。
+      if (::homeScreen.isInitialized) homeScreen.updateWorkspaceLabel()
+      if (::settingsScreen.isInitialized) settingsScreen.updateWorkspaceLabel()
       pendingPickCallback?.let { cb ->
         pendingPickCallback = null
         webView.evaluateJavascript(
@@ -211,22 +214,37 @@ class MainActivity : ComponentActivity() {
     }
   }
 
-  /** 插件包（.tgz）文件选择（SAF）：复制到缓存后交给插件页解压导入。 */
+  /** 插件包（.tgz）文件选择（SAF）：复制到缓存后交给插件页解压导入。
+   *  注意：解压大插件包耗时，必须在后台线程执行，避免主线程卡顿触发「进程未响应」（ANR）。 */
   private val pluginPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
     val term = terminalScreen.terminal()
     if (uri == null) return@registerForActivityResult
-    try {
-      val tmp = File(cacheDir, "import-plugin.tgz")
-      contentResolver.openInputStream(uri)?.use { input ->
-        tmp.outputStream().use { out -> input.copyTo(out) }
+    Thread {
+      try {
+        runOnUiThread { term.appendLine("正在复制并解压插件包…") }
+        val tmp = File(cacheDir, "import-plugin.tgz")
+        contentResolver.openInputStream(uri)?.use { input ->
+          tmp.outputStream().use { out -> input.copyTo(out) }
+        }
+        val msg = pluginsScreen.importFrom(tmp)
+        tmp.delete()
+        runOnUiThread {
+          term.appendLine("插件导入：" + msg)
+          pluginsScreen.refresh()
+          // 导入成功后触发引擎重启使插件生效（引擎未在跑时仅提示）。
+          if (msg.startsWith("已导入插件")) {
+            term.appendLine("重启引擎使插件生效…")
+            if (EngineProbe.check().optBoolean("running", false)) {
+              restartEngine()
+            } else {
+              term.appendLine("引擎未在运行，已就绪的插件将在下次启动时加载")
+            }
+          }
+        }
+      } catch (t: Throwable) {
+        runOnUiThread { term.appendLine("插件导入失败：" + (t.message ?: t.javaClass.simpleName)) }
       }
-      val msg = pluginsScreen.importFrom(tmp)
-      tmp.delete()
-      term.appendLine("插件导入：" + msg)
-      pluginsScreen.refresh()
-    } catch (t: Throwable) {
-      term.appendLine("插件导入失败：" + (t.message ?: t.javaClass.simpleName))
-    }
+    }.start()
   }
 
   /** 背景图片选择（相册）：直接把所选图 Uri 交给全屏裁剪覆盖层；确认后由裁剪回调落盘并应用，取消不改动。 */
@@ -1040,11 +1058,19 @@ class MainActivity : ComponentActivity() {
   }
 
   /** 引擎启动失败弹窗：展示详细错误日志报告（引擎日志 + 设备/架构诊断），支持下载与重试。
-   *  满足「引擎启动错误时弹窗显示详细错误日志报告并支持下载」。 */
+   *  满足「引擎启动错误时弹窗显示详细错误日志报告并支持下载」。
+   *  若引擎日志含 preset/persona 冲突特征串（插件内置 agent-presets 与 dsh 核心 preset 重复注册），
+   *  追加「停用冲突插件并重启」操作，一键回滚到可用状态。 */
   private fun showEngineFailureDialog(reason: String) {
     val tail = engineManager.engineLogTail(60)
     val degradedHint = if (tail.contains("降级模式") || tail.contains("degraded"))
       I18n.t(this, "⚠️ 本次为降级模式启动（termux-exec 钩子未注入）\n", "⚠️ Started in degraded mode (termux-exec hook not injected)\n")
+    else ""
+    // preset/persona 冲突特征：插件内置 agent-presets 与 dsh 核心 preset 重复注册 → 会话无法恢复。
+    val conflictHints = listOf("already registered", "failed to mount", "resume failed for session", "agent-presets", "persona")
+    val hasConflict = conflictHints.any { tail.contains(it, ignoreCase = true) }
+    val conflictHint = if (hasConflict)
+      I18n.t(this, "\n\n⚠️ 检测到插件与引擎预设冲突（persona/preset 重复注册），通常由最近安装的含 agent-presets 的插件导致。可在下方「停用冲突插件并重启」。", "\n\n⚠️ A plugin conflicts with engine presets (duplicate persona/preset registration), usually caused by a recently installed plugin shipping its own agent-presets. Use \"Disable conflicting plugin & restart\" below.")
     else ""
     val report = buildString {
       append(degradedHint)
@@ -1056,20 +1082,46 @@ class MainActivity : ComponentActivity() {
         .append(engineManager.embeddedNodeArchLabel()).append('\n')
       append('\n').append(I18n.t(this@MainActivity, "----- engine.log -----", "----- engine.log -----")).append('\n')
       append(if (tail.isBlank()) I18n.t(this@MainActivity, "（无日志输出）", "(no log output)") else tail)
+      append(conflictHint)
     }
     runOnUiThread {
+      val actions = mutableListOf<DialogUi.Action>()
+      actions += DialogUi.Action(I18n.t(this, "下载错误报告", "Download report")) { exportEngineErrorReport(report) }
+      if (hasConflict) {
+        actions += DialogUi.Action(
+          I18n.t(this, "停用冲突插件并重启", "Disable conflicting plugin & restart"),
+          accent = true,
+        ) { disableConflictPluginsAndRestart() }
+      }
+      actions += DialogUi.Action(I18n.t(this, "重试", "Retry"), accent = true) { restartEngine() }
+      actions += DialogUi.Action(I18n.t(this, "关闭", "Close")) { /* 仅关闭 */ }
       DialogUi.show(
         this,
         title = I18n.t(this, "引擎启动失败", "Engine failed to start"),
         message = report,
         iconRes = R.drawable.ic_shield,
-        actions = listOf(
-          DialogUi.Action(I18n.t(this, "下载错误报告", "Download report")) { exportEngineErrorReport(report) },
-          DialogUi.Action(I18n.t(this, "重试", "Retry"), accent = true) { restartEngine() },
-          DialogUi.Action(I18n.t(this, "关闭", "Close")) { /* 仅关闭 */ },
-        ),
+        actions = actions,
         cancelable = true,
       )
+    }
+  }
+
+  /** 停用含 agent-presets 的冲突插件并重启引擎（启动失败弹窗的恢复入口）。
+   *  无冲突插件时仅提示，不重启。 */
+  private fun disableConflictPluginsAndRestart() {
+    val term = terminalScreen.terminal()
+    val disabled = pluginsScreen.disablePresetConflictPlugins()
+    pluginsScreen.refresh()
+    if (disabled.isEmpty()) {
+      term.appendLine("未发现含 agent-presets 的冲突插件，未做改动")
+      return
+    }
+    term.appendLine("已停用冲突插件：" + disabled.joinToString("、"))
+    if (EngineProbe.check().optBoolean("running", false)) {
+      term.appendLine("重启引擎使改动生效…")
+      restartEngine()
+    } else {
+      term.appendLine("引擎未在运行，已停用的插件将在下次启动时不再加载")
     }
   }
 
@@ -1233,9 +1285,15 @@ class MainActivity : ComponentActivity() {
     val engineLaunchMs = System.currentTimeMillis()
     var started = false
     var crashReported = false
-    for (i in 0..180) {
+    // 常规探测预算 180 次（90s）。引擎进程若仍存活（慢速冷启动/大快照首启/
+    // 更新后重新拉起），只要进程还活着就不判失败——继续报「等待就绪」——
+    // 额外宽限到 300 次（150s），修复「引擎明明在启动中却弹启动失败」。
+    val maxProbes = 300
+    var probes = 0
+    while (probes <= maxProbes) {
       val ep = engineManager.engineProcessHandle
       val now = System.currentTimeMillis()
+      val alive = ep != null && ep.isAlive
       if (ep != null && !ep.isAlive && !started && now - engineLaunchMs < 30000L && !crashReported) {
         crashReported = true
         Logs.append(Logs.engineLog(this), "引擎启动后闪退(<30s)，launchAge=" + (now - engineLaunchMs) + "ms")
@@ -1246,7 +1304,13 @@ class MainActivity : ComponentActivity() {
       }
       drainEngineLog(term)
       if (EngineProbe.check().optBoolean("running", false)) { started = true; break }
-      term.appendProgress("启动引擎", "等待引擎就绪", i.toLong(), 180L)
+      probes++
+      // 常规预算用尽后：进程还活着就继续等（慢启动），进程已死才判定失败。
+      if (probes > 180 && !alive) break
+      if (probes > 180 && probes % 20 == 0) {
+        term.appendLine("引擎进程仍在运行，继续等待就绪…（已等待 " + (probes / 2) + "s）")
+      }
+      term.appendProgress("启动引擎", "等待引擎就绪", probes.toLong(), maxProbes.toLong())
       Thread.sleep(500)
     }
     if (started) {
@@ -1255,7 +1319,7 @@ class MainActivity : ComponentActivity() {
     drainEngineLog(term)
     if (!started && showErrorDialog) {
       updateEngineStatus(false, "")
-      showEngineFailureDialog("引擎启动超时（180 次探测未就绪）")
+      showEngineFailureDialog("引擎启动超时（" + maxProbes + " 次探测未就绪）")
     }
     return started
   }

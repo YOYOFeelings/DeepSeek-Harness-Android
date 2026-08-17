@@ -51,8 +51,10 @@ class UpdateManager(private val context: Context) {
   /** 用户自定义加速前缀（UI「添加更新源」写入）。 */
   @Volatile var customPrefix: String? = null
 
-  /** 并发防护：同一时刻只允许一个更新流程在跑，重复触发直接拒绝。 */
-  @Volatile private var updateRunning = false
+  // 并发防护：同一时刻只允许一个更新流程在跑，重复触发直接拒绝。
+  // 注意：必须用 companion 级状态（而非实例字段）——调用方各自 new UpdateManager
+  // （引导管线 / 启动流程 / 设置页）时，实例级守卫彼此不可见，会导致多个「下载中」
+  // 流程并发重叠。companion 全局守卫让无论哪个实例触发都只跑一个更新。
 
   fun builtinMirrors(): List<Mirror> = BUILTIN_MIRRORS
 
@@ -188,11 +190,10 @@ class UpdateManager(private val context: Context) {
     onStage: (stage: String, message: String) -> Unit,
     onProgress: ((done: Long, total: Long) -> Unit)? = null,
   ) {
-    if (updateRunning) {
+    if (!UPDATE_RUNNING.compareAndSet(false, true)) {
       onStage("失败", "更新已在运行")
       return
     }
-    updateRunning = true
     Thread {
       try {
         // 默认策略：未显式选择更新源时，先自动测速选最快可用源（选不上则保持 null，
@@ -322,6 +323,10 @@ class UpdateManager(private val context: Context) {
         onStage("切换", "切换运行时…")
         val usr = File(context.filesDir, "usr")
         val old = File(context.filesDir, "usr-old")
+        // 切换前记录用户插件（usr/lib/node_modules 顶层目录名），更新后还原，
+        // 修复「在线更新整体替换 usr，把用户安装的全局插件清掉」导致插件丢失/无法使用。
+        val userPlugins = File(usr, "lib/node_modules").listFiles()
+          ?.mapNotNull { it.name } ?: emptyList()
         deleteRecursively(old)
         if (usr.exists()) usr.renameTo(old)
         if (!newUsr.renameTo(usr)) throw IllegalStateException("切换失败")
@@ -341,6 +346,8 @@ class UpdateManager(private val context: Context) {
           runCatching { deleteRecursively(stage) }
           throw IllegalStateException("切换后关键文件断言失败，已回滚到旧 usr")
         }
+        // 切换成功：把旧 usr 里用户安装的插件还原回新 usr（新快照已含的同名核心依赖跳过，不覆盖）。
+        restoreUserPlugins(old, usr, userPlugins, onStage)
         deleteRecursively(stage)
         deleteRecursively(old)
 
@@ -385,7 +392,7 @@ class UpdateManager(private val context: Context) {
         onStage("失败", "更新失败：" + (t.message ?: t.javaClass.simpleName))
       }
       } finally {
-        updateRunning = false
+        UPDATE_RUNNING.set(false)
       }
     }.start()
   }
@@ -550,7 +557,69 @@ class UpdateManager(private val context: Context) {
     file.walkBottomUp().forEach { it.delete() }
   }
 
+  /**
+   * 更新切换后，把旧 usr 里用户安装的全局插件还原回新 usr：
+   * 仅复制新 usr 中「不存在同名包」的目录（新快照已含的核心依赖跳过，避免覆盖）。
+   * 失败只记日志，不阻断更新流程。 @param names 切换前记录的 node_modules 顶层条目名。
+   */
+  private fun restoreUserPlugins(
+    oldUsr: File,
+    newUsr: File,
+    names: List<String>,
+    onStage: (stage: String, message: String) -> Unit,
+  ) {
+    if (names.isEmpty()) return
+    val srcNm = File(oldUsr, "lib/node_modules")
+    val dstNm = File(newUsr, "lib/node_modules")
+    if (!srcNm.isDirectory) return
+    var restored = 0
+    for (name in names) {
+      try {
+        val src = File(srcNm, name)
+        val dst = File(dstNm, name)
+        if (!src.exists() || dst.exists()) continue
+        if (copyRecursively(src, dst)) restored++
+      } catch (t: Throwable) {
+        Logs.logE(context, "update", "还原用户插件失败: $name", t)
+      }
+    }
+    if (restored > 0) onStage("切换", "已还原 $restored 个用户插件")
+  }
+
+  /** 递归复制文件/目录；符号链接按链接复制（保留语义），失败返回 false。 */
+  private fun copyRecursively(src: File, dst: File): Boolean {
+    return try {
+      when {
+        java.nio.file.Files.isSymbolicLink(src.toPath()) -> {
+          val link = java.nio.file.Files.readSymbolicLink(src.toPath())
+          dst.parentFile?.mkdirs()
+          java.nio.file.Files.deleteIfExists(dst.toPath())
+          java.nio.file.Files.createSymbolicLink(dst.toPath(), link)
+          true
+        }
+        src.isDirectory -> {
+          dst.mkdirs()
+          var ok = true
+          for (child in (src.listFiles() ?: return true)) {
+            if (!copyRecursively(child, File(dst, child.name))) ok = false
+          }
+          ok
+        }
+        else -> {
+          dst.parentFile?.mkdirs()
+          src.copyTo(dst, overwrite = true)
+          true
+        }
+      }
+    } catch (_: Throwable) {
+      false
+    }
+  }
+
   companion object {
+    /** 全局更新并发守卫（companion 级：跨所有 UpdateManager 实例共享）。 */
+    private val UPDATE_RUNNING = java.util.concurrent.atomic.AtomicBoolean(false)
+
     /** 生产默认：GitHub Releases 的 MANIFEST.txt（官方发布清单）。 */
     const val DEFAULT_MANIFEST_URL =
       "https://github.com/YOYOFeelings/DeepSeek-Harness-Android/releases/latest/download/MANIFEST.txt"

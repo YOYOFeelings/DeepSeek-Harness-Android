@@ -141,6 +141,35 @@ class PluginsScreen(context: Context, private val callbacks: Callbacks) : Linear
     null
   }
 
+  /** 停用可能引起引擎预设冲突的插件（含 agent-presets 目录的插件），返回被停用插件名列表。
+   *  冲突特征：插件内置 agent-presets 下的 agent.cordis.yml 与 dsh 核心 preset 重复注册
+   *  （deployment:persona already registered）导致引擎 preset 挂载失败（failed to mount）、
+   *  会话无法恢复（resume failed for session）。停用方式与「停用」按钮一致：目录改名 *.disabled，
+   *  Node 不再解析；重启引擎后该插件不再触发冲突。 */
+  fun disablePresetConflictPlugins(): List<String> {
+    val disabled = mutableListOf<String>()
+    val modulesDir = File(File(context.filesDir, "usr"), "lib/node_modules")
+    fun disableIfConflict(dir: File, label: String) {
+      if (!dir.isDirectory) return
+      if (dir.name.endsWith(".disabled")) return
+      if (!File(dir, "agent-presets").isDirectory) return
+      val target = File(dir.parentFile, dir.name + ".disabled")
+      if (dir.renameTo(target)) disabled.add(label)
+    }
+    for (entry in (modulesDir.listFiles() ?: emptyArray())) {
+      if (!entry.isDirectory) continue
+      if (entry.name.startsWith("@")) {
+        // 作用域包：展开子包逐个检查
+        for (sub in (entry.listFiles() ?: emptyArray())) {
+          if (sub.isDirectory) disableIfConflict(sub, entry.name + "/" + sub.name)
+        }
+      } else {
+        disableIfConflict(entry, entry.name)
+      }
+    }
+    return disabled
+  }
+
   /** 重新读取并渲染插件列表。 */
   fun refresh() {
     rows.removeAllViews()

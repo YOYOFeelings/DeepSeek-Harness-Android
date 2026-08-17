@@ -26,9 +26,9 @@ android {
     // wrappers); 34 keeps native exec working on Android 15/16 devices.
     targetSdk = 34
     // 版本号规则（v0.12.0 起）：最低位 ≥10 时向次位进一，次位满 10 再向主位进一。
-    // 0.11.10 → 0.12.0；versionCode 随版本递增，22。
-    versionCode = 22
-    versionName = "0.12.0"
+    // 0.12.0 → 0.12.1；versionCode 随版本递增，23。
+    versionCode = 23
+    versionName = "0.12.1"
   }
 
   signingConfigs {

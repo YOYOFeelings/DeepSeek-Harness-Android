@@ -53,6 +53,8 @@ class HomeScreen(
   private val envNodeLabel = TextView(context)
   private val envPythonLabel = TextView(context)
   private val announcementBody = TextView(context)
+  /** 已选工作区路径小字（持久化于 workspace_dir，未选显示提示）。 */
+  private val workspaceLabel = TextView(context)
 
   /** 公告卡容器（无公告时 GONE）。 */
   private val announcementCard: LinearLayout
@@ -208,6 +210,15 @@ class HomeScreen(
     )
     statusContent.addView(statusBtnRow)
 
+    workspaceLabel.apply {
+      textSize = 11f
+      setTextColor(resources.getColor(R.color.text_tertiary, null))
+      setPadding(0, dp(6), 0, 0)
+      layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
+    }
+    updateWorkspaceLabel()
+    statusContent.addView(workspaceLabel)
+
     // 存储占用 + 一键清理缓存
     val storageRow = LinearLayout(context).apply {
       orientation = LinearLayout.HORIZONTAL
@@ -326,6 +337,7 @@ class HomeScreen(
   fun refresh() {
     post {
       refreshEnv()
+      updateWorkspaceLabel()
       // 崩溃提示条：依据 crash-marker 显隐。
       val prefs = context.getSharedPreferences("dsh_shell", Context.MODE_PRIVATE)
       crashBar.visibility = if (prefs.getBoolean(LogFox.PREF_CRASH_MARKER, false)) View.VISIBLE else View.GONE
@@ -357,6 +369,16 @@ class HomeScreen(
   }
 
   // ============ 环境检测 ============
+
+  /** 刷新已选工作区路径小字（读 workspace_dir；未选显示提示）。 */
+  fun updateWorkspaceLabel() {
+    val path = context.getSharedPreferences("dsh_shell", Context.MODE_PRIVATE)
+      .getString("workspace_dir", "") ?: ""
+    workspaceLabel.text = if (path.isBlank())
+      I18n.t(context, "未选择工作目录（点击上方按钮选择后长期保留）", "No workspace chosen (pick one above; it will be remembered)")
+    else
+      I18n.t(context, "当前工作区：", "Workspace: ") + path
+  }
 
   /** 后台探测 node / python 版本并刷新标签。 */
   private fun refreshEnv() {

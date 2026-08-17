@@ -55,6 +55,17 @@ object ShellExecutor {
       pb.environment().putAll(env)
       pb.redirectErrorStream(true)
       val proc = pb.start()
+      // ROOT 通道可能因 su 授权弹窗/超时挂起：加超时兜底，避免卡死调用方。
+      if (effective == PermissionMode.ROOT) {
+        val ok = proc.waitFor(30, java.util.concurrent.TimeUnit.SECONDS)
+        if (!ok) {
+          proc.destroyForcibly()
+          Logs.logE(context, TAG, "su 执行超时（可能等待授权）: $cmd")
+          return Result(-1, "su 执行超时（可能等待授权）")
+        }
+        val out = proc.inputStream.bufferedReader().use { it.readText() }
+        return Result(proc.exitValue(), out.trim())
+      }
       val out = proc.inputStream.bufferedReader().use { it.readText() }
       val exit = proc.waitFor()
       Result(exit, out.trim())

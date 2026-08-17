@@ -77,8 +77,16 @@ class SettingsScreen(context: Context, private val callbacks: Callbacks) : Linea
   private lateinit var customInput: EditText
   /** 下载记录文本（更新子页）。 */
   private lateinit var downloadHistoryText: TextView
-  /** 权限模式卡片列表（权限子页，刷新选中高亮用）。 */
+  /** 已选工作区路径小字（通用子页「操作」区；持久化于 workspace_dir，未选显示提示）。 */
+  private val workspaceLabel = TextView(context)
+  /** 权限模式卡片引用（mode → 卡片），供选中高亮刷新。 */
   private val permModeCards = mutableListOf<Pair<PermissionMode, LinearLayout>>()
+
+  /** 权限模式卡片的状态文案（mode → TextView），供后台真实探测后异步刷新（如 ROOT 的 su 探测）。 */
+  private val permModeStatusTexts = mutableMapOf<PermissionMode, TextView>()
+
+  /** 权限模式卡片的「当前使用」标记（mode → TextView），选中时可见，切换模式时跟随高亮。 */
+  private val permModeBadges = mutableMapOf<PermissionMode, TextView>()
 
   init {
     orientation = LinearLayout.VERTICAL
@@ -116,9 +124,20 @@ class SettingsScreen(context: Context, private val callbacks: Callbacks) : Linea
   /** 当前展示中的子页标题（用于外部触发时按需重建子页，如换背景后刷新「外观」）。 */
   private var currentPageTitle: String? = null
 
-  /** 刷新下载记录 / 更新源列表等动态子页内容。 */
+  /** 刷新下载记录 / 更新源列表等动态子页内容；权限模式真实可用性异步探测。 */
   fun refresh() {
     post { refreshDownloadHistory(); refreshMirrorList() }
+    refreshPermModeStatusAsync()
+    updateWorkspaceLabel()
+  }
+
+  /** 刷新已选工作区路径小字（读 workspace_dir；未选显示提示）。 */
+  fun updateWorkspaceLabel() {
+    val path = prefs.getString("workspace_dir", "") ?: ""
+    workspaceLabel.text = if (path.isBlank())
+      I18n.t(context, "未选择工作目录（点击上方按钮选择后长期保留）", "No workspace chosen (pick one above; it will be remembered)")
+    else
+      I18n.t(context, "当前工作区：", "Workspace: ") + path
   }
 
   /** 是否正停留在某个子页。 */
@@ -309,6 +328,14 @@ class SettingsScreen(context: Context, private val callbacks: Callbacks) : Linea
       LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f),
     )
     body.addView(row2)
+    workspaceLabel.apply {
+      textSize = 11f
+      setTextColor(resources.getColor(R.color.text_tertiary, null))
+      setPadding(0, dp(6), 0, 0)
+      layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
+    }
+    updateWorkspaceLabel()
+    body.addView(workspaceLabel)
     body.addView(
       flatButton(I18n.t(context, "导出调试日志", "Export debug logs"), accent = false) { callbacks.onExportDebugLogs() },
       LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) },
@@ -1226,18 +1253,35 @@ class SettingsScreen(context: Context, private val callbacks: Callbacks) : Linea
         LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT),
       )
       addView(col)
-      // 右侧状态文字（可用/不可用 + 原因）。
-      addView(
-        TextView(context).apply {
-          text = mode.status(context)
-          textSize = 10f
-          setTextColor(resources.getColor(R.color.text_secondary, null))
-          layoutParams = LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply { marginStart = dp(8) }
-        },
-      )
+      // 右侧：选中标记「当前使用」+ 状态文字（可用/不可用 + 原因，ROOT 由后台真实探测后刷新）。
+      val right = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.END
+        layoutParams = LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply { marginStart = dp(8) }
+      }
+      val badge = TextView(context).apply {
+        text = I18n.t(context, "当前使用", "Current")
+        textSize = 10f
+        typeface = Typeface.DEFAULT_BOLD
+        setTextColor(resources.getColor(R.color.surface, null))
+        gravity = Gravity.CENTER
+        setPadding(dp(8), dp(2), dp(8), dp(2))
+        background = resources.getDrawable(R.drawable.bg_button_accent, null)
+        visibility = if (selected) View.VISIBLE else View.GONE
+      }
+      permModeBadges[mode] = badge
+      right.addView(badge, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(4) })
+      val statusTv = TextView(context).apply {
+        text = mode.status(context)
+        textSize = 10f
+        setTextColor(resources.getColor(R.color.text_secondary, null))
+      }
+      permModeStatusTexts[mode] = statusTv
+      right.addView(statusTv)
+      addView(right)
     }
 
-  /** 刷新权限模式卡片选中高亮（选中的加描边 + 浅色底，其余恢复 bg_card）。 */
+  /** 刷新权限模式卡片选中高亮（选中的加描边 + 浅色底 + 「当前使用」标记，其余恢复 bg_card）。 */
   private fun refreshPermModeHighlight() {
     for ((mode, card) in permModeCards) {
       val selected = mode == PermissionMode.load(context)
@@ -1251,6 +1295,19 @@ class SettingsScreen(context: Context, private val callbacks: Callbacks) : Linea
       } else {
         resources.getDrawable(R.drawable.bg_card, null)
       }
+      permModeBadges[mode]?.visibility = if (selected) View.VISIBLE else View.GONE
+    }
+  }
+
+  /** 后台真实探测权限模式可用性并刷新状态文案（ROOT 会实际 exec `su -c id`，
+   *  不能在主线程执行；NORMAL 无需探测直接跳过）。 */
+  private fun refreshPermModeStatusAsync() {
+    for ((mode, tv) in permModeStatusTexts) {
+      if (mode == PermissionMode.NORMAL) continue
+      Thread {
+        val st = mode.probeStatus(context)
+        post { tv.text = st }
+      }.start()
     }
   }
 
@@ -1268,6 +1325,8 @@ class SettingsScreen(context: Context, private val callbacks: Callbacks) : Linea
       permModeCards.add(mode to card)
       body.addView(card)
     }
+    // ROOT/ADB/SHIZUKU 真实可用性由后台探测刷新（ROOT 会实际 exec su，不能在主线程）。
+    refreshPermModeStatusAsync()
     body.addView(divider(), LayoutParams(LayoutParams.MATCH_PARENT, 1).apply { topMargin = dp(6) })
 
     // 1) 通知权限（Android 13+ 需要运行时授权）

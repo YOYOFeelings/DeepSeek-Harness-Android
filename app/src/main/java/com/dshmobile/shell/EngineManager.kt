@@ -165,11 +165,19 @@ class EngineManager(private val context: Context, private val pickToken: String?
     }
   }
 
-  /** 恢复快照剥离的用户数据目录/文件（从备份拷贝回私有 .dsh）。 */
+  /**
+   * 恢复快照剥离的用户数据目录/文件（从备份拷贝回私有 .dsh）。
+   * 注意：**不恢复 profiles**。profiles 出厂配置（cordis*.yml + 各 profile 的
+   * node_modules）一律以快照为准：快照内置 @dsh-android 系统插件
+   * （dsh-shell-termux / dsh-host-web-compat / dsh-client-ui-responsive），
+   * 若从旧备份恢复 profiles 会把新快照的这些系统包覆盖掉 → 引擎启动即崩
+   * （cordis include 找不到 @dsh-android/dsh-shell-termux 等）。手动 patch
+   * 需在新版快照基础上重打（缺失的 @dsh-android 由 ensureSystemPlugins 兜底补装）。
+   */
   private fun restoreUserData(backup: File, dsh: File) {
     if (!backup.exists()) return
     for (name in listOf(
-      "sessions", "storages", "attachments", "profiles",
+      "sessions", "storages", "attachments",
       ".credentials.yaml", "settings.yaml", ".anonymous-user-id", ".private-layout",
     )) {
       val src = File(backup, name)
@@ -221,6 +229,10 @@ class EngineManager(private val context: Context, private val pickToken: String?
     val dshData = dshDataDir
     val privateDsh = File(homeDir, ".dsh")
     privateDsh.mkdirs()
+    // @dsh-android 系统插件保障：web/headless profile 的 cordis 配置强依赖这些包，
+    // 缺失时从内嵌快照补装（幂等，齐全时零开销；兜底 restoreUserData 不恢复 profiles 后
+    // 的遗留破损安装）。必须在 .private-layout 早返回之前执行。
+    ensureSystemPlugins()
     // Web 控制页保存的插件/配置在 profiles 下：保证目录存在且可写（写读测试），
     // 失败给出可操作诊断——否则 Web 保存不生效。
     val profiles = File(privateDsh, "profiles")
@@ -259,6 +271,84 @@ class EngineManager(private val context: Context, private val pickToken: String?
       ensurePublicExportRepo(dshData)
     }
     return privateDsh
+  }
+
+  /**
+   * @dsh-android 系统插件保障（web/headless profile 的 cordis 配置强依赖）：
+   * 确保 `profiles/<profile>/node_modules/@dsh-android/{dsh-shell-termux,
+   * dsh-host-web-compat,dsh-client-ui-responsive}` 三件套齐全；缺失时从内嵌快照的
+   * `home/.dsh/profiles/<profile>/node_modules/@dsh-android` 子树补装。
+   * 幂等：三包齐全时零开销；已破损安装只在引擎启动前补一次。失败仅告警不阻断启动。
+   */
+  private fun ensureSystemPlugins() {
+    val profilesDir = File(dshDir, "profiles")
+    for (profile in listOf("web", "headless")) {
+      try {
+        val nm = File(File(profilesDir, profile), "node_modules")
+        val pkgDir = File(nm, "@dsh-android")
+        if (systemPluginsPresent(pkgDir)) continue
+        extractDshAndroidFromSnapshot(profile, nm)
+        val after = systemPluginsPresent(pkgDir)
+        val w = "[系统插件] profile=$profile @dsh-android " +
+          if (after) "缺失，已从快照补装" else "缺失且补装失败（请检查快照完整性）"
+        Logs.append(Logs.engineLog(context), w)
+        if (!after) Log.e(TAG, "ensureSystemPlugins($profile): $w")
+      } catch (t: Throwable) {
+        Log.e(TAG, "ensureSystemPlugins($profile) failed: " + t.message)
+      }
+    }
+  }
+
+  /** @dsh-android 三件套是否齐全（Node 解析要求每包存在 package.json）。 */
+  private fun systemPluginsPresent(pkgDir: File): Boolean =
+    SYSTEM_PLUGIN_NAMES.all { File(File(pkgDir, it), "package.json").isFile }
+
+  /** 从内嵌快照流式抽取 `home/.dsh/profiles/<profile>/node_modules/@dsh-android/` 子树到目标 node_modules。 */
+  private fun extractDshAndroidFromSnapshot(profile: String, nodeModulesDir: File) {
+    val prefix = "home/.dsh/profiles/$profile/node_modules/@dsh-android/"
+    nodeModulesDir.mkdirs()
+    // 先清理可能存在的破损/残留三件套，保证补装结果为快照的完整状态。
+    for (name in SYSTEM_PLUGIN_NAMES) {
+      try { File(nodeModulesDir, "@dsh-android/$name").deleteRecursively() } catch (_: Throwable) {}
+    }
+    var extracted = 0
+    context.assets.open("snapshot.tar.xz").use { input ->
+      val xz = XZCompressorInputStream(input)
+      val tar = TarArchiveInputStream(xz)
+      var entry: TarArchiveEntry? = tar.nextEntry
+      while (entry != null) {
+        val name = entry.name
+        if (name.startsWith(prefix)) {
+          val target = File(nodeModulesDir, "@dsh-android/" + name.removePrefix(prefix))
+          when {
+            entry.isDirectory -> target.mkdirs()
+            entry.isSymbolicLink -> {
+              target.parentFile?.mkdirs()
+              try { Files.deleteIfExists(target.toPath()) } catch (_: Throwable) {}
+              try { Files.createSymbolicLink(target.toPath(), java.nio.file.Paths.get(entry.linkName)) } catch (_: Throwable) {}
+            }
+            else -> {
+              target.parentFile?.mkdirs()
+              target.outputStream().use { out ->
+                val buf = ByteArray(64 * 1024)
+                var n = tar.read(buf)
+                while (n >= 0) { out.write(buf, 0, n); n = tar.read(buf) }
+              }
+              target.setReadable(true, true)
+              target.setWritable(true, true)
+              target.setExecutable(entry.mode and 0x40 != 0, true)
+              extracted++
+            }
+          }
+        } else {
+          val skip = entry.size
+          if (skip > 0) tar.skip(skip)
+        }
+        entry = tar.nextEntry
+      }
+      tar.close()
+    }
+    if (extracted == 0) throw java.io.IOException("snapshot 无 @dsh-android 子树（profile=$profile）")
   }
 
   /**
@@ -674,6 +764,11 @@ class EngineManager(private val context: Context, private val pickToken: String?
 
   companion object {
     private const val TAG = "dsh-engine"
+
+    /** web/headless profile 的 cordis 配置强依赖的 @dsh-android 系统插件（缺一引擎即崩）。 */
+    private val SYSTEM_PLUGIN_NAMES = listOf(
+      "dsh-shell-termux", "dsh-host-web-compat", "dsh-client-ui-responsive",
+    )
 
     /** 出厂缺省 settings.yaml（引擎首次运行会按需覆盖/补充）。 */
     private const val DEFAULT_SETTINGS_YAML = "# dsh-mobile 出厂配置（由 APK 引导安装写入）\n"

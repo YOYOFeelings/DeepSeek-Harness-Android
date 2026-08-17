@@ -32,11 +32,22 @@ enum class PermissionMode(
     SHIZUKU -> ShizukuSupport.isAvailable()
   }
 
-  /** 状态文案（可用/不可用 + 原因），供引导页/设置页展示。 */
+  /** 状态文案（可用/不可用 + 原因），供引导页/设置页展示。
+   *  注意：必须轻量、不阻塞主线程——ROOT 只用路径快速判断（真实提权探测见 [probeRoot]，
+   *  供后台线程/设置页异步刷新用，避免主线程 exec 卡顿）。 */
   fun status(context: Context): String = when (this) {
     NORMAL -> "始终可用"
     ADB -> if (adbAvailable()) "可用（已开启无线调试）" else "不可用：需开启无线调试"
-    ROOT -> if (rootAvailable()) "可用" else "不可用：未检测到 su"
+    ROOT -> if (suPresent()) "可用（检测到 su，点击选择后生效）" else "不可用：未检测到 su"
+    SHIZUKU -> if (ShizukuSupport.isAvailable()) "可用（已授权）" else "不可用：需安装并授权 Shizuku"
+  }
+
+  /** 状态文案的真实探测版本（ROOT 会实际执行 `su -c id`），仅供后台线程调用
+   *  （设置页异步刷新用），避免在主线程阻塞 exec。 */
+  fun probeStatus(context: Context): String = when (this) {
+    NORMAL -> "始终可用"
+    ADB -> if (adbAvailable()) "可用（已开启无线调试）" else "不可用：需开启无线调试"
+    ROOT -> if (probeRoot()) "可用（已授权 root）" else "不可用：su 未授权、拒绝或超时"
     SHIZUKU -> if (ShizukuSupport.isAvailable()) "可用（已授权）" else "不可用：需安装并授权 Shizuku"
   }
 
@@ -71,8 +82,17 @@ enum class PermissionMode(
       false
     }
 
-    /** ROOT 可用性：检查常见路径/PATH 下的 su 是否存在且可执行（不提权、不弹授权框）。 */
-    private fun rootAvailable(): Boolean {
+    /**
+     * ROOT 可用性：真实提权探测。先快速路径扫描（PATH/常见路径下无 su 直接 false，
+     * 不再 exec），有 su 再执行 `su -c id`，输出含 `uid=0` 才算可用——
+     * 修复「明明有 su 文件/权限位，但 su 未授权、拒绝或超时，导致提权工具无法使用」
+     * 的误判（旧实现只看 su.canExecute() 权限位）。
+     * 注意：会实际拉起 su（首次可能在 root 管理器弹授权框），不要在主线程调用。
+     */
+    private fun rootAvailable(): Boolean = probeRoot()
+
+    /** su 是否存在于 PATH/常见路径且可执行（不提权、不弹授权框，主线程安全）。 */
+    private fun suPresent(): Boolean {
       val paths = (System.getenv("PATH") ?: "/system/bin:/system/xbin")
         .split(':').filter { it.isNotBlank() }
       val candidates = paths.map { File(it, "su") } + listOf(
@@ -81,5 +101,27 @@ enum class PermissionMode(
       )
       return candidates.any { it.canExecute() }
     }
+
+    /** 真实提权探测（必须后台线程调用）：`su -c id` 输出含 `uid=0` 即 root 可用。
+     *  超时自动 kill，避免 su 授权弹窗/挂起卡死调用方。 */
+    fun probeRoot(timeoutMs: Long = 2000): Boolean {
+      if (!suPresent()) return false
+      return try {
+        val p = Runtime.getRuntime().exec(arrayOf("su", "-c", "id"))
+        val ok = p.waitFor(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+        if (!ok) {
+          p.destroyForcibly()
+          false
+        } else {
+          val out = p.inputStream.bufferedReader().use { it.readText() }
+          out.contains("uid=0")
+        }
+      } catch (_: Throwable) {
+        false
+      }
+    }
+
+    /** 供 ShellExecutor/设置页「测试提权」用：等价于 [probeRoot]（后台线程调用）。 */
+    fun testRoot(context: Context): Boolean = probeRoot()
   }
 }
