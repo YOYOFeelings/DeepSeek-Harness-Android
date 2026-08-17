@@ -1,0 +1,111 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      snapshot_url:
+        description: '快照下载地址（可选，留空则使用内置快照）'
+        required: false
+        default: ''
+      version_override:
+        description: '覆盖版本号（可选，格式：x.y.z）'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build:
+    name: Build APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Download snapshot (if URL provided)
+        if: inputs.snapshot_url != ''
+        run: |
+          curl -L -o app/src/main/assets/snapshot.tar.xz "${{ inputs.snapshot_url }}"
+          echo "快照已下载"
+
+      - name: Determine version
+        id: version
+        run: |
+          VERSION_NAME=$(grep 'versionName' app/build.gradle.kts | grep -oE '"[^"]+"' | tail -1 | tr -d '"')
+          VERSION_CODE=$(grep 'versionCode' app/build.gradle.kts | grep -oE '[0-9]+' | head -1)
+          if [[ -n "${{ inputs.version_override }}" ]]; then
+            VERSION_NAME="${{ inputs.version_override }}"
+            VERSION_CODE=$((VERSION_CODE + 1))
+            sed -i "s/versionCode = ${VERSION_CODE}/versionCode = ${VERSION_CODE}+1/" app/build.gradle.kts
+            sed -i "s/versionName = \"${VERSION_NAME}\"/versionName = \"${{ inputs.version_override }}\"/" app/build.gradle.kts
+          fi
+          echo "version_name=${VERSION_NAME}" >> $GITHUB_OUTPUT
+          echo "version_code=${VERSION_CODE}" >> $GITHUB_OUTPUT
+          echo "tag=v${VERSION_NAME}" >> $GITHUB_OUTPUT
+
+      - name: Grant execute permission
+        run: chmod +x gradlew
+
+      - name: Build Release APK
+        run: |
+          ./gradlew assembleRelease \
+            -Pandroid.suppressUnsupportedCompileSdk=36 \
+            --no-daemon
+
+      - name: Find APK
+        id: apk
+        run: |
+          APK_PATH=$(find . -name "deepseek-harness-*-release.apk" | head -1)
+          echo "apk_path=${APK_PATH}" >> $GITHUB_OUTPUT
+          echo "APK: ${APK_PATH}"
+          ls -lh "${APK_PATH}"
+
+      - name: Upload APK to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.tag }}
+          files: ${{ steps.apk.outputs.apk_path }}
+          body: |
+            ## ${{{ steps.version.outputs.tag }}} Release
+
+            ### 📦 构建信息
+            - 版本: ${{ steps.version.outputs.version_name }}
+            - Build Code: ${{ steps.version.outputs.version_code }}
+            - 架构: x86_64（内嵌快照）
+
+            ### 📋 安装
+            1. 下载附件中的 APK
+            2. 安装并授予必要权限
+            3. 首次启动需联网下载运行时快照（约 70MB）
+
+            ### 🔧 构建命令
+            \`\`\`bash
+            ./gradlew assembleRelease
+            \`\`\`
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload APK as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deepseek-harness-${{ steps.version.outputs.version_name }}
+          path: ${{ steps.apk.outputs.apk_path }}
+          retention-days: 30
