@@ -1,5 +1,39 @@
 # DeepSeek Harness Android — 更新公告
 
+## v0.11.8
+
+**中文**
+
+- 全面代码审计，修复 10 个 bug（3 HIGH + 7 MEDIUM）：
+  - 【高危】修复多镜像下载回退失效：加速镜像固化 URL 后所有回退源下载同一地址，改用原始基址逐源解析。
+  - 【高危】修复解压进度条原地刷新 off-by-one：进度行无限拼接，改为正确覆盖上一行。
+  - 【高危】修复 WebView JS 桥注入防护缺失：添加导航白名单（仅 localhost/127.0.0.1/data:），saveSettingsYaml 添加 50KB 限制。
+  - 【中危】修复更新流程 TOCTOU 竞态：updateRunning 改为 AtomicBoolean CAS 原子占位。
+  - 【中危】修复运行时原子切换无回滚：renameTo 失败时从 usr-old 恢复旧运行时。
+  - 【中危】修复下载/解压失败残留数百 MB 临时文件：catch 块清理 update.tar.xz 和 update-stage。
+  - 【中危】修复 Logs.tail / engineLogTail 全量读文件 OOM：改为 forEachLine + 滑动窗口。
+  - 【中危】修复 StorageStats 符号链接环无限递归：增加 visited canonicalPath 集合。
+  - 【中危】修复插件导入阻塞主线程：importFrom 移入后台线程执行。
+  - 【中危】修复 ShizukuSupport.status TOCTOU NPE：getVersion 纳入 try/catch。
+- 完整审计报告见 [AUDIT-REPORT.md](AUDIT-REPORT.md)。
+
+**English**
+
+- Comprehensive code audit, fixed 10 bugs (3 HIGH + 7 MEDIUM):
+  - [HIGH] Fixed multi-mirror download fallback broken: CDN-prefixed URL caused all fallback sources to hit the same dead address; now uses raw base URL with per-source resolution.
+  - [HIGH] Fixed appendProgress off-by-one: progress lines appended infinitely; now correctly replaces the previous line.
+  - [HIGH] Fixed WebView JS bridge injection risk: added navigation whitelist (localhost/127.0.0.1/data: only); saveSettingsYaml capped at 50KB.
+  - [MEDIUM] Fixed updateRunning TOCTOU race: switched to AtomicBoolean CAS.
+  - [MEDIUM] Fixed non-atomic runtime switch with no rollback: restores usr from usr-old on failure.
+  - [MEDIUM] Fixed stale temp files after download/extract failure: cleanup in catch block.
+  - [MEDIUM] Fixed OOM in Logs.tail / engineLogTail: streaming reader with sliding window.
+  - [MEDIUM] Fixed StorageStats symlink loop StackOverflow: visited canonicalPath set.
+  - [MEDIUM] Fixed UI freeze on plugin import: importFrom moved to background thread.
+  - [MEDIUM] Fixed ShizukuSupport.status TOCTOU NPE: getVersion wrapped in try/catch.
+- Full audit report: [AUDIT-REPORT.md](AUDIT-REPORT.md).
+
+---
+
 ## v0.11.7
 
 **中文**
