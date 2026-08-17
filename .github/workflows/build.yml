@@ -87,7 +87,8 @@ jobs:
             "$PKG"
           echo "version_name=${VERSION_NAME}" >> $GITHUB_OUTPUT
           echo "version_code=${VERSION_CODE}" >> $GITHUB_OUTPUT
-          echo "tag=v${VERSION_NAME}" >> $GITHUB_OUTPUT
+          # APK release tag 格式：v0.11.7-fix（与快照存放的 v1.0 release 分离）
+          echo "tag=v${VERSION_NAME}-fix" >> $GITHUB_OUTPUT
 
       - name: Commit and push bumped version back to repo
         if: inputs.version_override == ''
