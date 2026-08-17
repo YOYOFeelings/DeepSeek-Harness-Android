@@ -54,9 +54,13 @@ class EngineService : Service() {
         exec.scheduleWithFixedDelay({
           // Web 打开期间不探测计数、不自动重启（用户在主动使用，引擎可能繁忙中）。
           if (!EngineManager.webActive && engineManager.engineReady) {
-            if (EngineProbe.check(timeoutMs = 2000).optBoolean("running", false)) {
+            val probe = EngineProbe.check(timeoutMs = 2000)
+            if (probe.optBoolean("running", false)) {
               failStreak = 0
               crashStreak = 0
+            } else if (probe.optString("reason") == "timeout") {
+              // 引擎繁忙/无响应（如网络切换后短暂卡顿）：不代表 crash，不计入失败次数，
+              // 避免看门狗误判并 force 重启正在正常工作的引擎。
             } else {
               failStreak++
               if (failStreak >= 3) {

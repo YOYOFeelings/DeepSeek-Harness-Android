@@ -256,22 +256,33 @@ class ApkUpdateManager(private val context: Context) {
     return enqueueDownload(url)
   }
 
-  /** 下载失败/产物无效时调用：换下一个候选加速源重新下载；无候选返回 null。 */
+  /** 下载失败/产物无效时调用：换下一个候选加速源重新下载；无候选返回 null。
+   *  先短暂等待网络稳定（网络切换/连接刚恢复时立即重试大概率再次失败）。 */
   fun retryWithNextSource(): Long? {
     val url = pendingDownloadUrls.poll() ?: return null
+    try {
+      Thread.sleep(2000)
+    } catch (_: InterruptedException) {
+      Thread.currentThread().interrupt()
+    }
     return enqueueDownload(url)
   }
 
-  /** 真正 enqueue 下载任务并记录 downloadId（供下载完成广播匹配）。 */
+  /** 真正 enqueue 下载任务并记录 downloadId（供下载完成广播匹配）。
+   *  用 setDestinationInExternalFilesDir 而非 Uri.fromFile(file://)：Android 10+ scoped
+   *  storage 下 DownloadManager 写外部缓存 file:// 路径会被拒（下载立即失败→反复重试）。 */
   private fun enqueueDownload(url: String): Long {
-    val destDir = context.getExternalCacheDir() ?: context.cacheDir
-    val dest = File(destDir, APK_FILE_NAME)
-    if (dest.exists()) dest.delete()
+    // 清掉旧产物，避免 DownloadManager 覆盖写入异常或读到上一轮残留包。
+    runCatching {
+      (context.getExternalFilesDir(null) ?: context.filesDir).let {
+        File(it, APK_FILE_NAME).delete()
+      }
+    }
     val request = DownloadManager.Request(Uri.parse(url))
       .setTitle(I18n.t(context, "deepseek HARNESS 更新", "deepseek HARNESS update"))
       .setDescription(I18n.t(context, "正在下载新版本 APK…", "Downloading new APK…"))
       .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-      .setDestinationUri(Uri.fromFile(dest))
+      .setDestinationInExternalFilesDir(context, null, APK_FILE_NAME)
       .setAllowedOverMetered(true)
     val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
     val id = dm.enqueue(request)
@@ -289,9 +300,9 @@ class ApkUpdateManager(private val context: Context) {
     context.startActivity(intent)
   }
 
-  /** 定位已下载完成的 APK（外部缓存目录）。 */
+  /** 定位已下载完成的 APK（DownloadManager 写往外部文件目录，与 enqueueDownload 目标一致）。 */
   fun findDownloadedApk(): File? {
-    val dir = context.getExternalCacheDir() ?: context.cacheDir
+    val dir = context.getExternalFilesDir(null) ?: context.filesDir
     val f = File(dir, APK_FILE_NAME)
     return if (f.exists()) f else null
   }

@@ -95,16 +95,26 @@ class MainActivity : ComponentActivity() {
           if (ok) {
             try { apk?.let { apkUpdateManager.installApk(it) } } catch (_: Throwable) { }
           } else {
-            // 下载失败或产物无效：自动换下一个加速源重试
+            // 下载失败或产物无效：自动换下一个加速源重试。
+            // retryWithNextSource 内含 2s 稳定等待，必须在后台线程执行（避免阻塞主线程）。
             apk?.delete()
-            val next = apkUpdateManager.retryWithNextSource()
-            val msg = if (next != null)
-              I18n.t(c, "当前加速源下载失败，已自动切换下一个源重试…", "Current source failed; switching to the next one and retrying…")
-            else
-              I18n.t(c, "所有更新源均下载失败，请检查网络后重试", "All update sources failed; check your network and retry")
-            try {
-              if (::terminalScreen.isInitialized) terminalScreen.terminal().appendLine(msg)
-            } catch (_: Throwable) { }
+            Thread {
+              val next = apkUpdateManager.retryWithNextSource()
+              val msg = if (next != null)
+                I18n.t(c, "当前加速源下载失败，已自动切换下一个源重试…", "Current source failed; switching to the next one and retrying…")
+              else
+                I18n.t(c, "所有更新源均下载失败，请检查网络后重试", "All update sources failed; check your network and retry")
+              // Activity 已销毁时不再操作 UI，避免空指针闪退。
+              if (isFinishing || isDestroyed) return@Thread
+              runOnUiThread {
+                try {
+                  if (::terminalScreen.isInitialized) terminalScreen.terminal().appendLine(msg)
+                } catch (_: Throwable) { }
+                if (next == null) {
+                  Toast.makeText(this@MainActivity, msg, Toast.LENGTH_LONG).show()
+                }
+              }
+            }.start()
           }
         }
       }
@@ -412,6 +422,8 @@ class MainActivity : ComponentActivity() {
     // 设置页「启动时自动启动引擎」关闭时，回到前台不再自动拉起引擎。
     if (!autoStartEngineEnabled()) return
     Thread {
+      // 网络切换/Activity 重建后引擎可能短暂未就绪：延迟 1s 再探测，避免误判未运行而重复启动。
+      try { Thread.sleep(1000) } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
       if (!EngineProbe.check().optBoolean("running", false)) runOnUiThread { startEngineFlow() }
     }.start()
   }

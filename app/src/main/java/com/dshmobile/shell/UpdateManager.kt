@@ -262,6 +262,12 @@ class UpdateManager(private val context: Context) {
           } catch (_: Throwable) {
             tmp.delete()
             onStage("下载", "更新源 " + m.name + " 下载失败，尝试下一个…")
+            // 网络切换/连接刚恢复时立即重试大概率再失败：短暂等待让网络稳定。
+            try {
+              Thread.sleep(2000)
+            } catch (_: InterruptedException) {
+              Thread.currentThread().interrupt()
+            }
           }
         }
         if (!downloaded) throw IllegalStateException("更新源下载均失败（已尝试 $attempts 个源）")
@@ -434,7 +440,7 @@ class UpdateManager(private val context: Context) {
   private fun openRaw(url: String, readTimeoutMs: Int): HttpURLConnection {
     val conn = URL(url).openConnection() as HttpURLConnection
     conn.instanceFollowRedirects = false
-    conn.connectTimeout = 10_000
+    conn.connectTimeout = 15_000
     conn.readTimeout = readTimeoutMs
     conn.setRequestProperty("User-Agent", UA)
     conn.setRequestProperty("Accept", "*/*")

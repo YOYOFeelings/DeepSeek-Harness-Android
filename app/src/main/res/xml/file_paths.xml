@@ -2,6 +2,8 @@
 <paths>
   <!-- APK 下载（DownloadManager 写入外部缓存目录） -->
   <external-cache-path name="apk_cache" path="." />
+  <!-- APK 下载（DownloadManager 写入外部文件目录，Android 10+ scoped storage 兼容） -->
+  <external-files-path name="apk_ext" path="." />
   <!-- 日志/报告分享：filesDir/logs/ -->
   <files-path name="logs" path="logs/" />
   <!-- 调试导出 zip：公共 Documents/dshdata/ -->
