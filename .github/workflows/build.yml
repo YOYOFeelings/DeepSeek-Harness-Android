@@ -6,8 +6,8 @@ on:
   workflow_dispatch:
     inputs:
       snapshot_url:
-        description: '快照下载地址（可选，留空则使用仓库内嵌快照）'
-        required: false
+        description: '快照下载地址（必填，x86_64 架构）'
+        required: true
         default: ''
       version_override:
         description: '覆盖版本号（可选，格式：x.y.z）'
@@ -36,12 +36,12 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Download snapshot from URL (if provided)
-        if: inputs.snapshot_url != ''
+      - name: Download snapshot
         run: |
           mkdir -p app/src/main/assets
-          curl -L -o app/src/main/assets/snapshot.tar.xz "${{ inputs.snapshot_url }}"
-          echo "快照已从 URL 下载"
+          echo "下载快照: ${{ inputs.snapshot_url }}"
+          curl -L --progress-bar -o app/src/main/assets/snapshot.tar.xz "${{ inputs.snapshot_url }}"
+          echo "快照大小:"
           ls -lh app/src/main/assets/snapshot.tar.xz
 
       - name: Determine version
@@ -71,7 +71,6 @@ jobs:
         run: |
           APK_PATH=$(find . -name "deepseek-harness-*-release.apk" | head -1)
           echo "apk_path=${APK_PATH}" >> $GITHUB_OUTPUT
-          echo "APK: ${APK_PATH}"
           ls -lh "${APK_PATH}"
 
       - name: Upload APK to Release
@@ -86,16 +85,16 @@ jobs:
             ### 📦 版本信息
             - 版本: ${{ steps.version.outputs.version_name }}
             - Build Code: ${{ steps.version.outputs.version_code }}
-            - 架构: x86_64（内嵌快照）
+            - 快照: x86_64
 
             ### 📋 安装
-            1. 下载附件中的 \`deepseek-harness-${{ steps.version.outputs.version_name }}-release.apk\`
+            1. 下载附件中的 APK
             2. 安装并授予必要权限
             3. 首次启动需联网下载运行时快照（约 70MB）
 
             ### 🔧 本地构建
             \`\`\`bash
-            ./gradlew assembleRelease
+            SNAPSHOT_URL=<快照地址> ./build-and-push.sh
             \`\`\`
           draft: false
           prerelease: false
