@@ -508,9 +508,11 @@ class UpdateManager(private val context: Context) {
     const val DEFAULT_MANIFEST_URL =
       "https://github.com/kcln243107/DeepSeek-Harness-Android/releases/latest/download/MANIFEST.txt"
 
-    /** 备用清单地址：latest 发布未附带 MANIFEST.txt 时回退到带清单的历史发布。 */
+    /** 备用清单地址：latest 发布未附带 MANIFEST.txt 时回退到带清单的历史发布。
+     *  注意：v1.0 仅存放快照（snapshot-arm64.tar.xz / snapshot-x86_64.tar.xz），
+     *  不含 MANIFEST.txt；MANIFEST 随 APK 版本发布（v0.11.7+）。 */
     const val DEFAULT_MANIFEST_FALLBACK_URL =
-      "https://github.com/kcln243107/DeepSeek-Harness-Android/releases/download/v0.11.4/MANIFEST.txt"
+      "https://github.com/kcln243107/DeepSeek-Harness-Android/releases/download/v0.11.7/MANIFEST.txt"
 
     /** 默认激活更新源 id（持久化配置缺省时使用 akaere）。 */
     const val DEFAULT_MIRROR_ID = "akaere"
