@@ -102,10 +102,15 @@ class AndroidBridge(
     return true
   }
 
-  /** 配置桥：把 settings.yaml 全文写入 DSH_HOME（失败返回 false）。 */
+  /** 配置桥：把 settings.yaml 全文写入 DSH_HOME（失败返回 false）。
+   *  BUG-修复：添加大小限制（≤ 50KB），防止恶意或异常 JS 注入巨型 YAML 撑爆磁盘。 */
   @JavascriptInterface
   fun saveSettingsYaml(yamlContent: String): Boolean {
     return try {
+      if (yamlContent.length > 50_000) {
+        Logs.logE(context, "bridge", "saveSettingsYaml 拒绝超大内容 (${yamlContent.length} chars)")
+        return false
+      }
       val dshHome = File(File(context.filesDir, "home"), ".dsh")
       dshHome.mkdirs()
       File(dshHome, "settings.yaml").writeText(yamlContent)

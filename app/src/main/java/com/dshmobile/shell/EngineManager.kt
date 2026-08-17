@@ -566,12 +566,15 @@ class EngineManager(private val context: Context, private val pickToken: String?
     EngineManager.lastStartedAt = 0
   }
 
-  /** 读取 engine.log 末尾若干行（引擎启动失败诊断用；无日志返回空串）。 */
+  /** 读取 engine.log 末尾若干行（引擎启动失败诊断用；无日志返回空串）。
+   *  BUG-修复：使用 Streams API 分段读取，避免 readLines() 把数百 MB 日志全量载入内存。 */
   fun engineLogTail(maxLines: Int = 40): String {
     val log = Logs.engineLog(context)
     if (!log.exists()) return ""
     return try {
-      log.readLines().takeLast(maxLines).joinToString("\n")
+      val lines = java.util.ArrayDeque<String>(maxLines)
+      log.forEachLine { lines.add(it); if (lines.size > maxLines) lines.removeFirst() }
+      lines.joinToString("\n")
     } catch (_: Throwable) {
       ""
     }

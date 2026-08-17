@@ -28,8 +28,17 @@ object StorageStats {
   private fun dirSizeBytes(dir: File): Long {
     if (dir.isFile) return dir.length()
     if (!dir.isDirectory) return 0L
-    var total = 0L
-    dir.listFiles()?.forEach { total += dirSizeBytes(it) }
-    return total
+    // BUG-修复：追踪已访问的规范路径，防止符号链接环（如 a→b→a）导致无限递归 OOM。
+    val visited = java.util.LinkedHashSet<String>()
+    fun visit(f: File): Long {
+      val canon = try { f.canonicalPath } catch (_: Exception) { return 0L }
+      if (!visited.add(canon)) return 0L // 环检测：已访问过，跳过
+      if (f.isFile) return f.length()
+      if (!f.isDirectory) return 0L
+      var total = 0L
+      for (child in (f.listFiles() ?: emptyArray())) total += visit(child)
+      return total
+    }
+    return visit(dir)
   }
 }

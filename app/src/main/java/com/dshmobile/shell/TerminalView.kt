@@ -131,16 +131,20 @@ class TerminalView(context: Context, private val logFile: File? = null) : Scroll
       post {
         val replace = lastStage == stage && lastLive
         if (replace) {
-          // 移除上一行：截断到最后一个换行符之前，再追加新进度行，实现"原地刷新"。
+          // BUG-修复：原代码用 lastIndexOf('\n') 只删掉末尾换行符，未删除上一行
+          // 进度文本本身，导致每次 tick 把新文本拼到旧文本之后（P1P2P3\n）。
+          // 修复：同时截到倒数第二个换行符之后，先去掉上一行进度再追加新进度。
           val current = textView.text.toString()
           val lastNl = current.lastIndexOf('\n')
-          textView.setText(if (lastNl >= 0) current.substring(0, lastNl) else "")
+          val prevNl = current.lastIndexOf('\n', lastNl - 1)
+          textView.setText(if (prevNl >= 0) current.substring(0, prevNl + 1) else "")
         }
         textView.append(line + "\n")
         lastStage = stage
         lastLive = true
         fullScroll(View.FOCUS_DOWN)
         mirrorToLog(line)
+        trimToMaxLines()
       }
     } else {
       val line = "[$stage] $message"

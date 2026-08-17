@@ -49,11 +49,15 @@ object Logs {
     append(exceptionsLog(context), sb.toString())
   }
 
-  /** 读取指定日志文件末尾若干行；缺失/失败返回空串。 */
+  /** 读取指定日志文件末尾若干行；缺失/失败返回空串。
+   *  BUG-修复：原实现用 readLines() 一次性读入全部文件到内存（log 文件可达数百 MB → OOM）。
+   *  改为分段跳过前缀行，只保留尾部 maxLines 行。 */
   fun tail(file: File, maxLines: Int = 60): String {
     if (!file.exists()) return ""
     return try {
-      file.readLines().takeLast(maxLines).joinToString("\n")
+      val lines = java.util.ArrayDeque<String>(maxLines)
+      file.forEachLine { lines.add(it); if (lines.size > maxLines) lines.removeFirst() }
+      lines.joinToString("\n")
     } catch (_: Throwable) {
       ""
     }

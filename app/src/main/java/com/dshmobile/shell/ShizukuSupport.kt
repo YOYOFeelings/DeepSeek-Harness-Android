@@ -21,12 +21,16 @@ object ShizukuSupport {
     }
   }
 
-  /** Status text for the UI; never throws. */
+  /** Status text for the UI; never throws.
+   *  BUG-修复：原代码在 isAvailable() 与 getVersion() 之间存在 TOCTOU 窗口——
+   *  Shizuku server 在这两步之间退出时 getVersion() 抛 NPE 到主线程导致崩溃。
+   *  把 getVersion 纳入 try/catch，与 isAvailable 保持同等防护。 */
   fun status(context: Context): String {
-    return if (isAvailable()) {
-      "Shizuku 已授权（v" + Shizuku.getVersion() + "）——保活增强就绪"
-    } else {
-      "Shizuku 未运行（可选：后台保活增强需要它）"
+    return try {
+      if (isAvailable()) "Shizuku 已授权（v" + Shizuku.getVersion() + "）——保活增强就绪"
+      else "Shizuku 未运行（可选：后台保活增强需要它）"
+    } catch (_: Throwable) {
+      "Shizuku 状态未知（server 可能已退出）"
     }
   }
 }

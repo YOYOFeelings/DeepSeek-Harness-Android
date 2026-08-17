@@ -205,10 +205,22 @@ class MainActivity : ComponentActivity() {
       contentResolver.openInputStream(uri)?.use { input ->
         tmp.outputStream().use { out -> input.copyTo(out) }
       }
-      val msg = pluginsScreen.importFrom(tmp)
-      tmp.delete()
-      term.appendLine("插件导入：" + msg)
-      pluginsScreen.refresh()
+      // BUG-修复：importFrom 执行 gzip/tar 解压与大量文件 IO，可能耗时数秒；
+      // 原代码在主线程同步调用会导致 UI 卡死。改为后台线程执行，结果 post 回主线程更新。
+      Thread {
+        try {
+          val msg = pluginsScreen.importFrom(tmp)
+          tmp.delete()
+          runOnUiThread {
+            term.appendLine("插件导入：" + msg)
+            pluginsScreen.refresh()
+          }
+        } catch (t: Throwable) {
+          runOnUiThread {
+            term.appendLine("插件导入失败：" + (t.message ?: t.javaClass.simpleName))
+          }
+        }
+      }.start()
     } catch (t: Throwable) {
       term.appendLine("插件导入失败：" + (t.message ?: t.javaClass.simpleName))
     }
@@ -1704,6 +1716,26 @@ class MainActivity : ComponentActivity() {
           super.onReceivedHttpError(view, request, errorResponse)
           if (request.isForMainFrame) {
             webTitleText.text = I18n.t(this@MainActivity, "加载失败（HTTP ", "Load failed (HTTP ") + errorResponse.statusCode + "），" + I18n.t(this@MainActivity, "点「刷新」重试", "tap Refresh to retry")
+          }
+        }
+
+        // BUG-修复：拦截所有主帧导航，只允许 localhost/127.0.0.1/data: URI。
+        // 防止引擎插件页或任意重定向把 WebView 导航到外部 URL，
+        // 之后攻击者脚本即可调用 androidBridge 任意桥方法（包括 saveSettingsYaml）。
+        override fun shouldOverrideUrlLoading(view: android.webkit.WebView, request: android.webkit.WebResourceRequest): Boolean {
+          if (!request.isForMainFrame) return false // 子帧导航不拦截
+          val url = request.url ?: return false
+          val scheme = url.scheme?.lowercase() ?: ""
+          return when {
+            scheme == "data" -> false // data: URI 正常加载（内联 HTML）
+            url.host == "127.0.0.1" || url.host == "localhost" -> false // 本地引擎页面，允许
+            scheme == "about" && url.path == "blank" -> false // about:blank
+            else -> {
+              // 阻止导航：拒绝外部 URL 主帧跳转
+              view.stopLoading()
+              webTitleText.text = I18n.t(this@MainActivity, "已阻止外部导航：${url.host}", "Blocked external navigation: ${url.host}")
+              true
+            }
           }
         }
       }

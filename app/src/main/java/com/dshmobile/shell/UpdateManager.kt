@@ -42,17 +42,17 @@ class UpdateManager(private val context: Context) {
   /** 备用发布清单 URL（latest 发布未附带 MANIFEST.txt 时的回退地址）。 */
   var manifestFallbackUrl: String = DEFAULT_MANIFEST_FALLBACK_URL
 
-  /** 本次更新实际取到清单所用的 URL（下载基址随它走）。 */
-  private var usedManifestUrl: String = DEFAULT_MANIFEST_URL
+  /** 本次更新实际取到清单所用的 URL（下载基址随它走）。@Volatile：更新线程写入，其他线程读取。 */
+  @Volatile private var usedManifestUrl: String = DEFAULT_MANIFEST_URL
 
   /** 当前激活更新源（null = 未显式选择 → 更新时自动测速选最快源；UI/引导流程可显式赋值）。 */
-  var activeMirror: Mirror? = null
+  @Volatile var activeMirror: Mirror? = null
 
   /** 用户自定义加速前缀（UI「添加更新源」写入）。 */
   var customPrefix: String? = null
 
-  /** 并发防护：同一时刻只允许一个更新流程在跑，重复触发直接拒绝。 */
-  @Volatile private var updateRunning = false
+  /** 并发防护：同一时刻只允许一个更新流程在跑，重复触发直接拒绝（CAS 原子占位）。 */
+  private val updateRunningCAS = java.util.concurrent.atomic.AtomicBoolean(false)
 
   fun builtinMirrors(): List<Mirror> = BUILTIN_MIRRORS
 
@@ -164,11 +164,12 @@ class UpdateManager(private val context: Context) {
     onStage: (stage: String, message: String) -> Unit,
     onProgress: ((done: Long, total: Long) -> Unit)? = null,
   ) {
-    if (updateRunning) {
+    // BUG-修复：原 if(updateRunning) 判断与 updateRunning=true 两步非原子（TOCTOU），
+    // 双连击可并发启动两个更新线程写同一 tmp/stage/usr。改用 CAS 原子占位。
+    if (!updateRunningCAS.compareAndSet(false, true)) {
       onStage("失败", "更新已在运行")
       return
     }
-    updateRunning = true
     Thread {
       try {
         // 默认策略：未显式选择更新源时，先自动测速选最快可用源（选不上则保持 null，
@@ -223,14 +224,18 @@ class UpdateManager(private val context: Context) {
         onStage("检查", "发现 " + sizeString(size) + " 快照" + mirrorTag())
         onStage("下载", "下载快照（" + sizeString(size) + "）…")
         val tmp = File(context.filesDir, "update.tar.xz")
-        val downloadUrl = downloadBase(bodyMirror) + filename
+        // BUG-修复：downloadBase(bodyMirror) 会把镜像前缀固化进 URL（host 变成镜像域名，
+        // 不再命中 GH_HOSTS），导致下载循环里 m.resolve(downloadUrl) 对每个回退源都原样
+        // 返回、26 个源全部下载同一个失效地址。改用未解析的原始 manifest 目录做基址，
+        // 循环内再逐源 m.resolve() 各自加前缀。
+        val rawBase = usedManifestUrl.substringBeforeLast('/') + "/"
         var downloaded = false
         // 下载记录信息（成功记录在「完成」阶段写入；失败在 catch 中写入）。
         downloadAttempted = true
         downloadSizeLabel = sizeString(size)
         for (m in mirrors) {
           try {
-            download(m.resolve(downloadUrl), m, tmp, size) { done, total ->
+            download(m.resolve(rawBase + filename), m, tmp, size) { done, total ->
               onProgress?.invoke(done, total) ?: Unit
             }
             downloaded = true
@@ -269,7 +274,18 @@ class UpdateManager(private val context: Context) {
         val old = File(context.filesDir, "usr-old")
         deleteRecursively(old)
         if (usr.exists()) usr.renameTo(old)
-        if (!newUsr.renameTo(usr)) throw IllegalStateException("切换失败")
+        // BUG-修复：newUsr.renameTo(usr) 失败时 usr 已不存在、旧运行时在 usr-old，
+        // 必须先把 old 回滚到 usr，否则引擎将无法启动（无回滚的原子切换）。
+        if (!newUsr.renameTo(usr)) {
+          if (old.exists()) {
+            try {
+              old.renameTo(usr)
+            } catch (_: Throwable) {
+              Logs.logE(context, "update", "切换失败且回滚失败，usr 目录可能缺失")
+            }
+          }
+          throw IllegalStateException("切换失败")
+        }
         deleteRecursively(stage)
         deleteRecursively(old)
 
@@ -296,6 +312,13 @@ class UpdateManager(private val context: Context) {
         onStage("完成", "更新完成，引擎将自动重启")
       } catch (t: Throwable) {
         Logs.logE(context, "update", "运行时更新失败", t)
+        // BUG-修复：解压/下载失败时清理残留的 update.tar.xz 与 update-stage，
+        // 防止数百 MB 临时文件堆积在 filesDir。
+        try {
+          File(context.filesDir, "update.tar.xz").delete()
+          deleteRecursively(File(context.filesDir, "update-stage"))
+        } catch (_: Throwable) {
+        }
         if (downloadAttempted) {
           DownloadHistory.add(
             context,
@@ -312,7 +335,7 @@ class UpdateManager(private val context: Context) {
         onStage("失败", "更新失败：" + (t.message ?: t.javaClass.simpleName))
       }
       } finally {
-        updateRunning = false
+        updateRunningCAS.set(false)
       }
     }.start()
   }
