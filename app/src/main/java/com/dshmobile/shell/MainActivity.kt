@@ -31,6 +31,7 @@ import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
@@ -781,8 +782,9 @@ class MainActivity : ComponentActivity() {
     terminalScreen.setEngineStatus(running, detail)
   }
 
-  /** 更新源测速弹窗：逐源实测延迟并实时刷新，完成后回调最快源（全失败回调 null）。
-   *  满足「点击更新时弹窗自动检测各更新源速度并选择最快源进行更新」。 */
+  /** 更新源测速弹窗：逐源并发实测延迟并实时刷新，完成后回调最快源（全失败回调 null）。
+   *  满足「点击更新时弹窗自动检测各更新源速度并选择最快源进行更新」。
+   *  并发探测 + 进度条动画 + 所有源行可滚动（修复「弹窗无法滑动、看不到全部源」）。 */
   private fun showSpeedTestDialog(onComplete: (Mirror?) -> Unit) {
     val um = UpdateManager.forPrefs(this)
     val sources = um.allMirrors()
@@ -790,6 +792,24 @@ class MainActivity : ComponentActivity() {
     val container = LinearLayout(this).apply {
       orientation = LinearLayout.VERTICAL
     }
+
+    // 顶部状态行：进度条 + 状态文本
+    val statusProgress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+      isIndeterminate = true
+      layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(3)).apply {
+        bottomMargin = dp(8)
+      }
+    }
+    container.addView(statusProgress)
+    val statusText = TextView(this).apply {
+      text = I18n.t(this@MainActivity, "正在并发检测 N 个源…", "Testing N sources concurrently…")
+        .replace("N", sources.size.toString())
+      textSize = 12f
+      setTextColor(resources.getColor(R.color.text_secondary, null))
+      setPadding(0, 0, 0, dp(8))
+    }
+    container.addView(statusText)
+
     for (m in sources) {
       val row = LinearLayout(this).apply {
         orientation = LinearLayout.HORIZONTAL
@@ -814,6 +834,7 @@ class MainActivity : ComponentActivity() {
       row.addView(latency)
       container.addView(row)
     }
+
     val completed = java.util.concurrent.atomic.AtomicBoolean(false)
     val dialog = DialogUi.show(
       this,
@@ -828,19 +849,47 @@ class MainActivity : ComponentActivity() {
       cancelable = true,
       onCancel = { if (completed.compareAndSet(false, true)) onComplete(null) },
     )
+
+    // 动画：每 250ms 切换测试中的疑似动画
+    val animHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    val animRunnable = object : Runnable {
+      var dots = 0
+      override fun run() {
+        if (completed.get()) return
+        dots = (dots + 1) % 4
+        val dotStr = ".".repeat(dots)
+        for (i in labels.indices) {
+          val cur = labels[i].text.toString()
+          if (cur == I18n.t(this@MainActivity, "测速中…", "testing…")
+              || cur.endsWith("..") || cur.endsWith("...") || cur.endsWith(".")) {
+            labels[i].text = I18n.t(this@MainActivity, "测速中", "testing") + dotStr
+          }
+        }
+        animHandler.postDelayed(this, 250)
+      }
+    }
+    animHandler.postDelayed(animRunnable, 250)
+
+    // 并发测速（阻塞直到所有源完成或超时）
     Thread {
       val fastest = um.speedTestAll { m, ms ->
         val idx = sources.indexOfFirst { it.id == m.id }
         val text = if (ms != null) ms.toString() + " ms" else I18n.t(this, "不可用", "unavailable")
         runOnUiThread { if (idx in labels.indices) labels[idx].text = text }
       }
-      try {
-        Thread.sleep(500)
-      } catch (_: InterruptedException) {}
       runOnUiThread {
         if (completed.compareAndSet(false, true)) {
-          dialog.dismiss()
-          onComplete(fastest)
+          animHandler.removeCallbacks(animRunnable)
+          statusProgress.visibility = android.view.View.GONE
+          statusText.text = if (fastest != null)
+            I18n.t(this, "已选择最快源：", "Fastest: ") + fastest.name
+          else
+            I18n.t(this, "所有源均不可用", "All sources unavailable")
+          // 短暂停留让用户看到结果再关闭
+          android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            dialog.dismiss()
+            onComplete(fastest)
+          }, 600)
         }
       }
     }.start()

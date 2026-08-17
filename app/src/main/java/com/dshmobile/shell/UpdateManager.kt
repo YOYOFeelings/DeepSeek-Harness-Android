@@ -78,18 +78,34 @@ class UpdateManager(private val context: Context) {
   fun selectFastestMirror(onLatency: (Mirror, Long?) -> Unit = { _, _ -> }): Mirror? =
     speedTestAll(onLatency)
 
-  /** 与 [selectFastestMirror] 等价，提供全量逐源延迟回调（测速弹窗展示用）。 */
+  /** 与 [selectFastestMirror] 等价，提供全量逐源延迟回调（测速弹窗展示用）。
+   *  **所有源并发探测**（不再逐个串行），每源完成后立即回调 [onEach]（调用方自行
+   *  runOnUiThread/post 刷新 UI），全部完成后返回最快可用源。 */
   fun speedTestAll(onEach: (Mirror, Long?) -> Unit = { _, _ -> }): Mirror? {
-    var fastest: Mirror? = null
-    var best = Long.MAX_VALUE
-    for (m in allMirrors()) {
-      val ms = measureMirror(m)
-      onEach(m, ms)
-      if (ms != null && ms < best) {
-        best = ms
-        fastest = m
+    val mirrors = allMirrors()
+    val results = java.util.concurrent.ConcurrentHashMap<String, Long?>()
+    val pool = java.util.concurrent.Executors.newFixedThreadPool(minOf(8, mirrors.size))
+    val latch = java.util.concurrent.CountDownLatch(mirrors.size)
+    try {
+      for (m in mirrors) {
+        pool.execute {
+          val ms = try {
+            measureMirror(m)
+          } catch (_: Throwable) {
+            null
+          }
+          results[m.id] = ms
+          onEach(m, ms)
+          latch.countDown()
+        }
       }
+      latch.await(30, java.util.concurrent.TimeUnit.SECONDS)
+    } catch (_: InterruptedException) {
+      Thread.currentThread().interrupt()
+    } finally {
+      pool.shutdownNow()
     }
+    val fastest = mirrors.filter { results[it.id] != null }.minByOrNull { results[it.id]!! }
     if (fastest == null) {
       Logs.logE(context, "update", "自动测速失败：所有更新源均不可用")
     }
@@ -223,14 +239,20 @@ class UpdateManager(private val context: Context) {
         onStage("检查", "发现 " + sizeString(size) + " 快照" + mirrorTag())
         onStage("下载", "下载快照（" + sizeString(size) + "）…")
         val tmp = File(context.filesDir, "update.tar.xz")
-        val downloadUrl = downloadBase(bodyMirror) + filename
+        // 用原始（未加镜像前缀）GitHub 资产 URL，按源逐个正确加前缀，
+        // 修复「一直换源：下载 URL 已带加速域名 → 每个源 resolve 都回退同一 URL」。
+        val rawBase = usedManifestUrl.substringBeforeLast('/') + "/"
+        val rawUrl = rawBase + filename
         var downloaded = false
-        // 下载记录信息（成功记录在「完成」阶段写入；失败在 catch 中写入）。
+        var attempts = 0
+        val preferred = listOf(bodyMirror) + mirrors.filter { it.id != bodyMirror.id }
         downloadAttempted = true
         downloadSizeLabel = sizeString(size)
-        for (m in mirrors) {
+        for (m in preferred) {
+          if (attempts >= 3) break
+          attempts++
           try {
-            download(m.resolve(downloadUrl), m, tmp, size) { done, total ->
+            download(m.resolve(rawUrl), m, tmp, size) { done, total ->
               onProgress?.invoke(done, total) ?: Unit
             }
             downloaded = true
@@ -241,7 +263,7 @@ class UpdateManager(private val context: Context) {
             onStage("下载", "更新源 " + m.name + " 下载失败，尝试下一个…")
           }
         }
-        if (!downloaded) throw IllegalStateException("所有更新源下载均失败")
+        if (!downloaded) throw IllegalStateException("更新源下载均失败（已尝试 $attempts 个源）")
 
         onStage("校验", "SHA256 校验…")
         val actual = sha256(tmp)
@@ -347,12 +369,7 @@ class UpdateManager(private val context: Context) {
     return null
   }
 
-  /** 实际取到清单所用 URL 的同目录（release download 目录）作为快照下载基址，保留镜像前缀。 */
-  private fun downloadBase(m: Mirror): String {
-    val base = m.resolve(usedManifestUrl)
-    return base.substringBeforeLast('/') + "/"
-  }
-
+  /** 当前激活源是加速源时的附加标签（官方直连返回空串）。 */
   private fun mirrorTag(): String {
     val m = activeMirror
     val p = m?.prefix?.takeIf { it.isNotEmpty() }
@@ -434,7 +451,7 @@ class UpdateManager(private val context: Context) {
     expectedSize: Long,
     onProgress: (Long, Long) -> Unit,
   ) {
-    val conn = open(url, mirror, 60_000)
+    val conn = open(url, mirror, 120_000)
     try {
       val code = conn.responseCode
       if (code != 200) throw IllegalStateException("下载 HTTP $code")

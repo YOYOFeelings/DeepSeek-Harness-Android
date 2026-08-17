@@ -7,7 +7,6 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.util.TypedValue
-import android.view.View
 import android.widget.ScrollView
 import android.widget.TextView
 import java.io.File
@@ -41,6 +40,7 @@ class TerminalView(context: Context, private val logFile: File? = null) : Scroll
     setHorizontallyScrolling(false)
     setBreakStrategy(android.text.Layout.BREAK_STRATEGY_HIGH_QUALITY)
     setEllipsize(null)
+    setMaxLines(Int.MAX_VALUE)
   }
 
   /** 上一行所属的 stage；配合 [lastLive] 判断是否可以“原地更新”成进度行。 */
@@ -82,7 +82,8 @@ class TerminalView(context: Context, private val logFile: File? = null) : Scroll
     val line = "[" + SimpleDateFormat("MM-dd HH:mm:ss", Locale.US).format(Date()) + "] " + text
     post {
       textView.append(line + "\n")
-      fullScroll(View.FOCUS_DOWN)
+      keepCursorAtEnd()
+      scrollToBottom()
       mirrorToLog(line)
       mirrorToDetailLog(line)
     }
@@ -96,7 +97,8 @@ class TerminalView(context: Context, private val logFile: File? = null) : Scroll
     post {
       textView.append(text + "\n")
       // 追加后必须重新滚到底部，否则新行会被顶出可视区，用户看不到最新输出。
-      fullScroll(View.FOCUS_DOWN)
+      keepCursorAtEnd()
+      scrollToBottom()
       mirrorToLog(text)
     }
   }
@@ -130,9 +132,10 @@ class TerminalView(context: Context, private val logFile: File? = null) : Scroll
           textView.setText(if (lastNl >= 0) current.substring(0, lastNl) else "")
         }
         textView.append(line + "\n")
+        keepCursorAtEnd()
         lastStage = stage
         lastLive = true
-        fullScroll(View.FOCUS_DOWN)
+        scrollToBottom()
         mirrorToLog(line)
       }
     } else {
@@ -142,7 +145,8 @@ class TerminalView(context: Context, private val logFile: File? = null) : Scroll
         // 普通行会打断“连续进度行”的判定，后续进度需要另起一行。
         lastStage = null
         lastLive = false
-        fullScroll(View.FOCUS_DOWN)
+        keepCursorAtEnd()
+        scrollToBottom()
         mirrorToLog(line)
       }
     }
@@ -177,6 +181,32 @@ class TerminalView(context: Context, private val logFile: File? = null) : Scroll
 
   /** dp 转 px 的私有辅助；minSdk 26 可直接读 density。 */
   private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+  /**
+   * 追加后把光标/选区保持在文本末尾，防止可选中 TextView（内部 EditText 行为）
+   * 在追加文本时把内部滚动复位到顶端。TextView 没有公开的 setSelection，
+   * 需通过 [android.text.Selection.setSelection] 作用于其 Spannable 文本。
+   */
+  private fun keepCursorAtEnd() {
+    val text = textView.text
+    if (text is android.text.Spannable) {
+      android.text.Selection.setSelection(text, text.length)
+    }
+  }
+
+  /**
+   * 追加后自动滚到底部。
+   * 不用 fullScroll(FOCUS_DOWN)：它在 append 后同一 UI 消息内按“旧内容高度”滚动，
+   * 配合可选中 TextView（内部 EditText 追加时滚动会复位到顶端）表现为
+   * “先跳到顶端、下一帧再回落”。这里嵌套 post 到本轮布局完成后，再按真实内容高度滚动。
+   */
+  private fun scrollToBottom() {
+    post {
+      post {
+        scrollTo(0, (textView.height - height).coerceAtLeast(0))
+      }
+    }
+  }
 
   /** 把一行文本镜像写入日志文件（若配置了 logFile）。失败静默，不影响终端展示。 */
   private fun mirrorToLog(line: String) {

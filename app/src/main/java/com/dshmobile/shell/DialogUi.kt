@@ -8,6 +8,7 @@ import android.graphics.Typeface
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -60,7 +61,9 @@ object DialogUi {
     }
   }
 
-  /** 展示自定义内容型弹窗并返回 dialog（供外部主动 dismiss，如测速动态列表）。 */
+  /** 展示自定义内容型弹窗并返回 dialog（供外部主动 dismiss，如测速动态列表）。
+   *  内容包进 ScrollView 并限制最大高度（约屏高 55%），源列表等长内容可上下滑动、
+   *  横竖屏均不超出屏幕（修复「测速弹窗无法滑动、看不到全部源」）。 */
   fun show(
     context: Context,
     title: String,
@@ -70,8 +73,24 @@ object DialogUi {
     cancelable: Boolean = true,
     onCancel: (() -> Unit)? = null,
   ): AlertDialog = build(context, title, iconRes, actions, cancelable, onCancel) { root ->
-    content.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-    root.addView(content)
+    val scroll = ScrollView(context).apply {
+      isVerticalScrollBarEnabled = true
+      layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+    }
+    content.layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+    scroll.addView(content, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+    // 最大高度：约屏幕高度的 55%（与 message 重载一致）。ScrollView 没有 maxHeight，
+    // 用限高容器在 onMeasure 阶段约束，长内容可滚动、不超出屏幕。
+    val maxHeightPx = dp(
+      context,
+      (context.resources.displayMetrics.heightPixels / context.resources.displayMetrics.density * 0.55f).toInt(),
+    )
+    root.addView(
+      MaxHeightLayout(context, maxHeightPx).apply {
+        addView(scroll, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+      },
+      LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT),
+    )
   }
 
   private fun build(
@@ -162,4 +181,16 @@ object DialogUi {
   private fun color(context: Context, res: Int): Int = context.resources.getColor(res, null)
 
   private fun dp(context: Context, value: Int): Int = (value * context.resources.displayMetrics.density).toInt()
+}
+
+/**
+ * 限高容器：在 onMeasure 阶段把高度约束在 [maxHeightPx] 以内，
+ * 配合 ScrollView 实现「内容超出可滚动、不超出屏幕」的效果。
+ * ScrollView 本身没有 maxHeight 属性，必须用此容器约束。
+ */
+private class MaxHeightLayout(context: Context, private val maxHeightPx: Int) : FrameLayout(context) {
+  override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+    val limited = MeasureSpec.makeMeasureSpec(maxHeightPx, MeasureSpec.AT_MOST)
+    super.onMeasure(widthMeasureSpec, limited)
+  }
 }

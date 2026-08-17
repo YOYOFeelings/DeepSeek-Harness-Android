@@ -60,13 +60,60 @@
 
 ## 项目简介
 
+一个 APK 开箱即用：**内嵌完整 Termux 运行时快照**（node + bash + coreutils + dsh + 插件），首启解压即用、完全离线；**运行时在线更新**（manifest 驱动，snapshot 热替换，SHA256 校验 → 原子切换 → 自动重启，无需更新 APK）；**双 ABI 快照自动匹配**（arm64 / x86_64 设备在线下载对应架构，解决「x86_64 快照在 arm64 设备上无法启动」）；**多镜像源并发测速**与限量回退（遇源不可用时自动回退至多 3 个源，不再无限换源）。
+
 - **内嵌运行时**：随包 ~70MB xz 快照（node + bash + coreutils + dsh + 插件）；首启约 10 秒解压、
   从应用自身目录启动引擎；**完全离线**；
 - **移动 UI**：系统 WebView 加载 `http://127.0.0.1:3080`，配响应式插件（手机端抽屉/sheet）；
 - **保活**：前台服务（"dsh 引擎运行中"）+ 5 秒看门狗（引擎崩溃自动重启）；
 - **在线更新**：manifest 驱动的快照热替换（下载 → sha256 → 原子切换 → 自动重启），
-  运行时可自更新而无需更新 APK；默认更新源 `https://cdn.akaere.online/`（可在「更新」页更换/添加自定义源）；
+  运行时可自更新而无需更新 APK；26 个内置国内加速源 + 自定义源，**并发测速自动选最快源**；
 - **SAF 桥**：`pickDirectory` 把所选目录映射为真实路径（`/storage/emulated/0/…`）。
+
+---
+
+## 项目结构
+
+```text
+DeepSeek-Harness-Android/
+├── app/
+│   ├── build.gradle.kts          ← AGP 8.9.x, Kotlin 2.0.x, minSdk 26, targetSdk 36
+│   └── src/main/
+│       ├── AndroidManifest.xml
+│       ├── assets/
+│       │   ├── snapshot.tar.xz   ← 内嵌 Termux 运行时快照（~70MB xz 压缩）
+│       │   └── snapshot.sha256   ← 快照指纹（防升级后重解压覆盖）
+│       ├── java/com/dshmobile/shell/
+│       │   ├── MainActivity.kt       ← 入口：引导 / 引擎启动 / 在线更新 / 弹窗
+│       │   ├── AndroidBridge.kt      ← JS 桥协议（checkEngine/pickDirectory/saveConfig 等）
+│       │   ├── EngineManager.kt      ← 快照解压 / ELF 架构校验 / 引擎进程管理
+│       │   ├── UpdateManager.kt      ← 运行时快照在线更新（manifest 拉取 + 镜像测速 + 下载 + 校验 + 切换）
+│       │   ├── ApkUpdateManager.kt   ← APK 自更新（版本检查 + 下载 + 安装）
+│       │   ├── SnapshotExtractor.kt  ← xz 解压引擎（带进度回调）
+│       │   ├── RuntimePermissions.kt ← 可执行权限（exec 位 / Android 私有 exec 属性）
+│       │   ├── TerminalView.kt       ← 终端模拟日志面板（ScrollView + TextView）
+│       │   ├── TerminalScreen.kt     ← 终端页（底部导航 Tab 3）
+│       │   ├── HomeScreen.kt         ← 主页（状态卡 + 公告 + 操作按钮）
+│       │   ├── SettingsScreen.kt     ← 设置页（更新源 / 镜像测速 / 存储 / 关于）
+│       │   ├── PluginsScreen.kt      ← 插件管理页
+│       │   ├── DialogUi.kt           ← 统一弹窗（Flat Minimalist 圆角白卡）
+│       │   ├── I18n.kt               ← 中英文国际化
+│       │   ├── Logs.kt               ← 日志目录与文件管理
+│       │   ├── AnnouncementManager.kt← 公告拉取（主页公告卡）
+│       │   ├── DownloadHistory.kt    ← 下载记录持久化
+│       │   ├── EngineProbe.kt        ← 引擎 127.0.0.1:3080 探测
+│       │   └── EngineService.kt      ← 前台服务（保活 + 看门狗）
+│       └── res/                      ← 最小资源（矢量图标 / 颜色 / 圆角背景）
+├── docs/
+│   └── design.md                  ← 壳 APK 设计文档（桥协议 / 权限 / 页面结构）
+├── ANNOUNCEMENT.md                ← 版本更新公告（中英双语，主页可查）
+├── PITFALLS.md                    ← 踩坑记录（MANIFEST.txt 分发 / 快照指纹 / 架构匹配等）
+├── NOTICE.md                      ← 主页公告（新闻动态）
+├── README.md                      ← 本文件
+├── build.gradle.kts               ← 根构建脚本
+├── settings.gradle.kts
+└── gradle/                        ← Gradle 8.11.1 wrapper
+```
 
 ---
 

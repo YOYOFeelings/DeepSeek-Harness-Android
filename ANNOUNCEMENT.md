@@ -1,5 +1,49 @@
 # DeepSeek Harness Android — 更新公告
 
+## v0.11.6
+
+**中文**
+
+v0.11.6 为**体验修复版**，重点修复终端滚动异常、测速弹窗滑动、更新源下载反复换源等问题。
+
+- **修复终端输出滚动异常与换行**
+  - 修复追加文本时「先跳到顶端再回落」的滚动跳动问题：改用嵌套 `post` 延迟滚动，确保在布局完成后按真实高度滚动到底部；
+  - 追加 `setSelection(textView.length())` 保持光标在末尾，避免可选中 TextView 内部滚动复位；
+  - 加固长行自动换行：`setMaxLines(Int.MAX_VALUE)` 兜底，确保超宽行按屏幕宽度软换行。
+- **修复测速弹窗无法上下滑动**
+  - 自定义内容型弹窗（测速源列表 26+ 行）现在包入 `ScrollView` 并限制最大高度约屏高 55%，所有源完整可见并可上下滑动。
+- **修复更新时一直换源无法正常下载**
+  - 根因：下载 URL 已带加速域名，每个源 `resolve` 后仍为同一 URL，导致反复重试同一失败下载；
+  - 修复：使用原始 GitHub 资产 URL，按源逐个正确添加前缀；优先使用已拉取到清单的源，失败时最多尝试 3 个源后中止报错，不再无限换源。
+- **所有源并发测速**
+  - 测速改为「所有源并发探测」（线程池 + CountDownLatch），不再逐个串行，速度大幅提升；
+  - 测速弹窗新增进度条动画与实时状态反馈（每源完成后立即显示延迟或"不可用"）。
+- **下载超时放宽至 120 秒**
+  - 慢速但可用的更新源不再被误判为失败。
+- **README 完善**
+  - 新增「项目结构」章节，详细列出关键文件路径及其职责，便于后续开发维护。
+
+**English**
+
+v0.11.6 is an **experience improvement release** fixing terminal scroll glitches, speed-test dialog scrolling, and update source download retry loops.
+
+- **Fix terminal scroll glitch and line wrapping**
+  - Fixed the "jumps to top then scrolls down" scroll glitch: replaced `fullScroll(FOCUS_DOWN)` with nested `post` scroll that fires after layout completes for the real content height;
+  - Added `setSelection(textView.length())` to keep the cursor at the end, preventing the selectable TextView from resetting scroll;
+  - Hardened line wrapping: `setMaxLines(Int.MAX_VALUE)` ensures long lines soft-wrap correctly.
+- **Fix speed-test dialog not scrollable**
+  - Custom-content dialogs (26+ source rows) are now wrapped in a `ScrollView` with a max height of ~55% screen height — all sources are visible and scrollable.
+- **Fix download loop (always switching sources)**
+  - Root cause: the download URL already carried an accelerator domain, so `resolve()` returned the same URL for every source, causing repeated retries of the same failed download;
+  - Fix: use the raw GitHub asset URL and prepend each source's prefix individually; prefer the source that already fetched the manifest, retry at most 3 sources before aborting.
+- **Concurrent speed testing for all sources**
+  - All sources are probed concurrently (thread pool + CountDownLatch), no longer serial — dramatically faster;
+  - New progress bar animation and real-time status feedback in the speed-test dialog.
+- **Download read timeout increased to 120s**
+  - Slow but working sources are no longer misjudged as failed.
+- **README improved**
+  - Added a "Project Structure" section listing key file paths with their responsibilities.
+
 ## v0.11.5
 
 **中文**
