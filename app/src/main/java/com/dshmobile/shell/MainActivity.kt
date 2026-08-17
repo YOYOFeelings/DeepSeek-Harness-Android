@@ -159,6 +159,12 @@ class MainActivity : ComponentActivity() {
   /** 首次引导页视图（GONE 默认，首次启动时 VISIBLE）。 */
   private lateinit var onboardingView: View
 
+  /** 引导页选中的权限模式（「开始使用」时持久化到 prefs）。 */
+  private var guidePermMode = PermissionMode.NORMAL
+
+  /** 引导页权限模式卡片引用（mode → 卡片），供选中高亮刷新。 */
+  private val guidePermCards = mutableListOf<Pair<PermissionMode, LinearLayout>>()
+
   /** engine.log 已流式输出到终端的字节数（跨流程复用，只输出新增行）。 */
   @Volatile private var engineLogRead = 0L
 
@@ -1760,6 +1766,17 @@ class MainActivity : ComponentActivity() {
       if (Build.VERSION.SDK_INT >= 30 && !guideFilesGranted()) I18n.t(this, "去授权", "Grant") else null,
     ) { openAllFilesAccessSettings() })
     content.addView(
+      sectionLabel(I18n.t(this, "权限模式（命令执行通道）", "Permission mode (command channel)")).apply { setPadding(0, dp(18), 0, dp(4)) },
+    )
+    // 四种权限模式卡片：普通 / adb / ROOT / adb(shizuku)，按不同权限挂载不同容器调用通道。
+    PermissionMode.entries.forEach { mode ->
+      val card = permissionModeCard(mode)
+      guidePermCards.add(mode to card)
+      content.addView(card)
+    }
+    // 默认选中「普通权限」并高亮。
+    refreshPermCardHighlight()
+    content.addView(
       sectionLabel(I18n.t(this, "注意事项", "Notes")).apply { setPadding(0, dp(18), 0, dp(4)) },
     )
     content.addView(
@@ -1790,6 +1807,9 @@ class MainActivity : ComponentActivity() {
         ).apply { topMargin = dp(20) }
         setOnClickListener {
           prefs.edit().putBoolean("guide_seen", true).apply()
+          // 持久化引导页所选权限模式（命令执行通道）。
+          PermissionMode.save(this@MainActivity, guidePermMode)
+          LogFox.trackUser(this@MainActivity, "guide", "perm_mode=" + guidePermMode.id)
           onboardingView.visibility = View.GONE
           guideActive = false
           startPostGuide()
@@ -1861,6 +1881,93 @@ class MainActivity : ComponentActivity() {
     typeface = Typeface.DEFAULT_BOLD
     setTextColor(resources.getColor(R.color.text, null))
     setPadding(0, 0, 0, dp(4))
+  }
+
+  /** 权限模式卡片：图标 + 标题/说明/前置要求 + 右侧状态；点击选中并高亮。 */
+  private fun permissionModeCard(mode: PermissionMode): LinearLayout {
+    val card = LinearLayout(this).apply {
+      orientation = LinearLayout.HORIZONTAL
+      gravity = Gravity.CENTER_VERTICAL
+      setPadding(dp(12), dp(12), dp(12), dp(12))
+      background = resources.getDrawable(R.drawable.bg_card, null)
+      layoutParams = LinearLayout.LayoutParams(
+        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+      ).apply { bottomMargin = dp(8) }
+      isClickable = true
+      isFocusable = true
+      setOnClickListener {
+        guidePermMode = mode
+        LogFox.trackUser(this@MainActivity, "guide", "select_perm_mode=" + mode.id)
+        refreshPermCardHighlight()
+      }
+    }
+    val icon = ImageView(this).apply {
+      setImageResource(R.drawable.ic_shield)
+      setTint(resources.getColor(R.color.accent, null))
+      layoutParams = LinearLayout.LayoutParams(dp(22), dp(22)).apply { marginEnd = dp(12) }
+    }
+    card.addView(icon)
+    val col = LinearLayout(this).apply {
+      orientation = LinearLayout.VERTICAL
+      layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+    }
+    col.addView(
+      TextView(this).apply {
+        text = mode.label
+        textSize = 13f
+        typeface = Typeface.DEFAULT_BOLD
+        setTextColor(resources.getColor(R.color.text, null))
+      },
+      LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT),
+    )
+    col.addView(
+      TextView(this).apply {
+        text = mode.desc
+        textSize = 11f
+        setTextColor(resources.getColor(R.color.text_secondary, null))
+        setPadding(0, dp(2), 0, 0)
+      },
+      LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT),
+    )
+    col.addView(
+      TextView(this).apply {
+        text = mode.prereq
+        textSize = 10f
+        setTextColor(resources.getColor(R.color.text_tertiary, null))
+        setPadding(0, dp(2), 0, 0)
+      },
+      LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT),
+    )
+    card.addView(col)
+    // 右侧状态文字（可用/不可用 + 原因）。
+    card.addView(
+      TextView(this).apply {
+        text = mode.status(this@MainActivity)
+        textSize = 10f
+        setTextColor(resources.getColor(R.color.text_secondary, null))
+        layoutParams = LinearLayout.LayoutParams(
+          ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+        ).apply { marginStart = dp(8) }
+      },
+    )
+    return card
+  }
+
+  /** 刷新权限模式卡片选中高亮（选中的加描边 + 浅色底）。 */
+  private fun refreshPermCardHighlight() {
+    for ((mode, card) in guidePermCards) {
+      val selected = mode == guidePermMode
+      card.background = if (selected) {
+        GradientDrawable().apply {
+          shape = GradientDrawable.RECTANGLE
+          cornerRadius = dp(12).toFloat()
+          setColor(resources.getColor(R.color.accent_soft, null))
+          setStroke(dp(2), resources.getColor(R.color.accent, null))
+        }
+      } else {
+        resources.getDrawable(R.drawable.bg_card, null)
+      }
+    }
   }
 
   private fun guideNotifGranted(): Boolean =

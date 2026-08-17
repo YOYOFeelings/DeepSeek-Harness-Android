@@ -576,6 +576,9 @@ class EngineManager(private val context: Context, private val pickToken: String?
     }
 
     return try {
+      // 清理持有 3080 端口的残留引擎进程（app 被杀/崩溃后可能留下孤儿 node），
+      // 防止新引擎启动时 listen EADDRINUSE。CAS 已串行化，只清理后自己再拉起。
+      cleanupStaleEngine()
       val args = arrayOf(nodeBin.absolutePath, "--expose-internals",
         File(usrDir, "lib/node_modules/@deepseek-ai/dsh/lib/bin.js").absolutePath,
         "web", "--port", port.toString())
@@ -631,6 +634,20 @@ class EngineManager(private val context: Context, private val pickToken: String?
       if (e.message?.contains("Permission denied") != true) throw e
       Log.w(TAG, "direct exec denied, falling back to linker64: " + e.message)
       build(listOf("/system/bin/linker64") + args.toList()).start()
+    }
+  }
+
+  /** 清理持有引擎端口的残留进程（app 被杀/崩溃后遗留的孤儿 node），防止 EADDRINUSE。
+   *  仅在 STARTING CAS 串行化后调用：先清残留、后自己拉起，不会误杀同时启动的新引擎。 */
+  private fun cleanupStaleEngine() {
+    val current = engineProcess
+    if (current != null && current.isAlive) return // 复用运行中引擎，不清理
+    try {
+      Runtime.getRuntime().exec(arrayOf("/system/bin/pkill", "-f", "lib/bin.js"))
+        .waitFor(3, java.util.concurrent.TimeUnit.SECONDS)
+      Logs.append(Logs.engineLog(context), "[启动前清理] 已清除残留引擎进程（若存在）")
+    } catch (_: Throwable) {
+      // 无 pkill / 无残留时静默
     }
   }
 

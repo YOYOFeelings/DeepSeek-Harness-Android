@@ -501,12 +501,14 @@ class UpdateManager(private val context: Context) {
             out.write(buf, 0, n)
             done += n
             if (done - last >= 256 * 1024) {
-              onProgress(done, total)
+              // done 封顶到 total：清单 size 可能小于实际文件（如 arm64 快照 75.8MB
+              // 但清单标 72.3MB），避免进度显示"79.6/72.3 MB"超过总量。
+              onProgress(if (total > 0) minOf(done, total) else done, total)
               last = done
             }
             n = input.read(buf)
           }
-          onProgress(done, total)
+          onProgress(if (total > 0) minOf(done, total) else done, total)
         }
       }
     } finally {

@@ -69,7 +69,11 @@ object SnapshotExtractor {
         }
       }
       done += entry.size
-      if (done % (1024 * 1024) < entry.size) onProgress(done, totalBytes)
+      // done 累计的是解压后字节数（uncompressed），而 totalBytes 是压缩包大小，
+      // 解压后半段 done 会超过 totalBytes → 进度显示"446.5/72.3 MB"（量纲不一致）。
+      // 上报时把 done 封顶到 total（total<=0 表示未知，不封顶），进度条到顶后保持 100%。
+      val report = if (totalBytes > 0) minOf(done, totalBytes) else done
+      if (done % (1024 * 1024) < entry.size) onProgress(report, totalBytes)
       entry = tar.nextEntry
     }
     tar.close()
