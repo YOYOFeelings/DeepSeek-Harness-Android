@@ -1,5 +1,23 @@
 # DeepSeek Harness Android — 更新公告
 
+## v0.11.7
+
+**中文**
+
+- 修复公告弹窗与 APK 更新检查不工作：三处硬编码 URL（AnnouncementManager / ApkUpdateManager / UpdateManager）从 YOYOFeelings 仓库迁移至 kcln243107 仓库，公告和更新均可正常获取。
+- 修复 Web 端插件配置无法保存：移除 `injectIndexShim` 中的 `webActive` 守卫，引擎运行时仍对 localhost HTML 响应注入 localStorage 宿主化代理；新增 `ConcurrentHashMap.newKeySet` 去重防止 SPA 子路由重复注入。
+- 修复引擎启动并发竞态：`ensurePrivateDshData()` 添加 `dshDataLock` 同步锁，防止 MainActivity 引导线程与 EngineService 看门狗线程并发写 DSH_HOME 标记文件。
+- Workflow 新增自动版本递增：每次 push 到 main 或手动触发时，自动计算 `versionCode = BASE_CODE + commit增量` 并写回 `build.gradle.kts`，无需手动改版本号。
+
+**English**
+
+- Fixed announcement popup and APK update check: migrated hardcoded URLs (AnnouncementManager / ApkUpdateManager / UpdateManager) from YOYOFeelings repo to kcln243107 repo.
+- Fixed Web plugin config not saving: removed `webActive` guard in `injectIndexShim`, ensuring localStorage shim is injected even when engine is running; added dedup set to prevent double-injection on SPA sub-routes.
+- Fixed engine startup race condition: added `dshDataLock` synchronization in `ensurePrivateDshData()` to prevent concurrent writes from MainActivity bootstrap thread and EngineService watchdog thread.
+- Added auto-version-increment to workflow: each push/manual dispatch auto-computes `versionCode = BASE_CODE + commit_count` and writes back to `build.gradle.kts`.
+
+---
+
 ## v0.11.0
 
 **中文**

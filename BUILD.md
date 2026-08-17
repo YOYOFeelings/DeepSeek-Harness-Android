@@ -13,25 +13,37 @@
 
 ## 推荐方案：GitHub Actions（无需本地环境）
 
-### 方式一：推送触发（自动）
+### 自动模式（推荐）
+
+每次 push 到 `main` 分支，workflow 自动触发构建，版本号自动递增：
+
 ```bash
-# 已将构建脚本推送到仓库
-# 推送任何提交到 main 分支会自动触发构建
 git push origin main
 ```
 
-### 方式二：手动触发（推荐）
+版本号计算规则：
+- `BASE_VERSION` = `build.gradle.kts` 中的当前 `versionName`（保持不变）
+- `BASE_CODE` = `build.gradle.kts` 中的当前 `versionCode`
+- `N` = 最近同类 tag（如 `v0.11.4-fix`）以来的 commit 数
+- **`versionCode = BASE_CODE + N`**（每次构建后自动写回并推送）
+- **`versionName`** 保持不变，仅在明确升级时手动通过 `version_override` 覆盖
+
+### 手动触发（workflow_dispatch）
+
 访问仓库页面手动触发：
 ```
 https://github.com/kcln243107/DeepSeek-Harness-Android/actions/workflows/build.yml
 ```
+
 点击 **"Run workflow"** → 可选填入：
-- `snapshot_url`: 快照下载地址（留空则使用仓库内嵌快照）
-- `version_override`: 版本号覆盖（如 `0.11.5`）
+- `snapshot_url`: 快照下载地址（必填，x86_64 架构）
+- `version_override`: 强制指定版本（如 `0.12.0`，留空则自动递增）
+- `version_code_override`: 强制指定 versionCode（如 `50`，仅配合 version_override 使用）
 
 ### 构建产物
-- Release tag: `v0.11.4`（自动从 build.gradle.kts 读取）
-- APK 附件: `deepseek-harness-0.11.4-release.apk`
+
+- Release tag: `v{versionName}`（如 `v0.11.7`）
+- APK 附件: `deepseek-harness-{versionName}-release.apk`
 - 工作流日志: Actions 标签页
 
 ## 本地构建（需要额外安装）
@@ -82,3 +94,9 @@ A: 首次构建需下载依赖，约 10-20 分钟，属正常。
 
 ### Q: 签名不一致无法覆盖安装
 A: 确保 debug/release 使用同一 keystore（已配置在 keystore.properties）。
+
+### Q: 版本号不递增
+A: 检查 workflow 是否成功 push 回 `build.gradle.kts`；确认仓库 settings 中 Actions 有写入权限。
+
+### Q: 如何指定特定版本（如 0.12.0）
+A: 通过 workflow_dispatch 传入 `version_override=0.12.0`，workflow 将跳过自动计算，直接使用指定版本。

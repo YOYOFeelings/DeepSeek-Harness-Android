@@ -39,6 +39,10 @@ mirror updates, APK self-update, and plugin management.
 
 ## 🆕 新闻 / 动态
 
+- 2026-08（v0.11.7）：修复公告弹窗/更新检查（URL 硬编码指向 YOYOFeelings 仓库）、Web 端插件配置无法保存（localStorage shim 注入失效）、引擎启动并发竞态（profiles 目录无同步锁）三项问题。workflow 新增自动版本递增，每次推送自动计算并写回 build.gradle.kts。
+- 2026-08（v0.11.6）：修复代码审查发现的 4 项 Bug——通知栏残留、主线程阻塞（.commit→.apply）、日志无限增长、Activity 销毁后后台线程泄漏。
+- 2026-08（v0.11.5）：修复 MainActivity 编译错误（缺少 kotlinx.coroutines 导入、可空类型处理）。
+- 2026-08（v0.11.4）：修复更新源误报不可达（manifest 404 回退）、localStorage 宿主化代理全页面注入、终端日志截断。
 - 2026-08（v0.11.1）：小版本修复更新——弹窗统一美化并可正常关闭，发布更新包版本策略明确。
 - 2026-08（v0.11.0）：新增「主页」公告查询页，公告配置独立于更新说明（NOTICE.md）。
 - 2026-08（v0.11.0）：终端页改为纯终端列表，横屏下滑不再被裁剪。
