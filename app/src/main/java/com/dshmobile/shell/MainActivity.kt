@@ -1208,8 +1208,10 @@ class MainActivity : ComponentActivity() {
         val needArchFix = !engineManager.nodeArchMatchesDevice()
         if (!needArchFix && !engineManager.snapshotFresh()) {
           updateEngineStatus(false, "正在更新运行时（约 70MB）…")
-          val ok = engineManager.refreshSnapshot { done, _ ->
-            terminalScreen.terminal().appendProgress("解压运行时", "更新运行时", done, 0)
+          val ok = engineManager.refreshSnapshot { done, total ->
+            // BUG 修复：total 必须透传真实值，否则 appendProgress 走无进度条分支，
+            // 每回调一次刷一行"更新运行时"，且无法显示解压进度。
+            terminalScreen.terminal().appendProgress("解压运行时", "更新运行时", done, total)
           }
           if (!ok) {
             terminalScreen.terminal().appendLine("运行时更新失败，请重试")

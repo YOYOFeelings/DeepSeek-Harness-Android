@@ -96,7 +96,9 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add app/build.gradle.kts
           if ! git diff --cached --quiet; then
-            git commit -m "chore: bump versionCode to ${{ steps.version.outputs.version_code }} (auto)"
+            # [skip ci] 标记：防止自动 push 再次触发 workflow → 无限循环
+            # （此前 versionCode 被自动从 19 涨到 49 就是循环的证据）
+            git commit -m "chore: bump versionCode to ${{ steps.version.outputs.version_code }} (auto) [skip ci]"
             git push origin main || echo "推送失败（可能已有其他提交），跳过"
             echo "已推送 versionCode=${{ steps.version.outputs.version_code }}"
           else
