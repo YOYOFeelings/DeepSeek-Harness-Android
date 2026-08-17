@@ -1389,13 +1389,15 @@ class MainActivity : ComponentActivity() {
    * 拉取主页 index HTML 并注入 localStorage 宿主化代理（见 storageShimScript），
    * 返回改写后的响应；任何失败返回 null（WebView 走默认加载，优雅降级）。
    * 运行在 shouldInterceptRequest 的后台线程，可做网络请求。
+   * BUG-2 修复：移除 webActive 守卫——引擎运行时仍需要对所有本地 HTML 响应注入代理，
+   *   否则 WebView 原生 localStorage 在存储被禁用时静默失败，插件配置永久丢失。
+   *   用 injectedShimUrls 防止同一 URL 重复注入（SPA 导航时子路由只注入一次）。
    */
+  private val injectedShimUrls = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
   private fun injectIndexShim(url: Uri): android.webkit.WebResourceResponse? {
-    // 引擎繁忙/无响应时快速回退：不再叠加第二个 GET 请求拖慢引擎，让 WebView 原生加载。
-    if (EngineManager.webActive) {
-      val busy = try { !EngineProbe.check(timeoutMs = 1500).optBoolean("running", false) } catch (_: Throwable) { true }
-      if (busy) return null
-    }
+    val key = url.toString()
+    if (!injectedShimUrls.add(key)) return null // 已注入过，跳过
     var conn: java.net.HttpURLConnection? = null
     return try {
       conn = (java.net.URL(url.toString()).openConnection() as java.net.HttpURLConnection).apply {
@@ -1419,6 +1421,7 @@ class MainActivity : ComponentActivity() {
         java.io.ByteArrayInputStream(injected.toByteArray(Charsets.UTF_8)),
       )
     } catch (_: Throwable) {
+      injectedShimUrls.remove(key) // 注入失败，允许重试
       null
     } finally {
       conn?.disconnect()

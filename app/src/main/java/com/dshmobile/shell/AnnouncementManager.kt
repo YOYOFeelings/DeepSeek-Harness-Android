@@ -14,7 +14,7 @@ import java.net.URL
 object AnnouncementManager {
 
   const val URL =
-    "https://raw.githubusercontent.com/YOYOFeelings/DeepSeek-Harness-Android/main/NOTICE.md"
+    "https://raw.githubusercontent.com/kcln243107/DeepSeek-Harness-Android/main/NOTICE.md"
 
   private const val PREFS = "dsh_shell"
   private const val KEY_CACHE = "announcement_cache"

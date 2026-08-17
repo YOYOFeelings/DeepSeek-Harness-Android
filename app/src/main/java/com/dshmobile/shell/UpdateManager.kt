@@ -483,11 +483,11 @@ class UpdateManager(private val context: Context) {
   companion object {
     /** 生产默认：GitHub Releases 的 MANIFEST.txt（官方发布清单）。 */
     const val DEFAULT_MANIFEST_URL =
-      "https://github.com/YOYOFeelings/DeepSeek-Harness-Android/releases/latest/download/MANIFEST.txt"
+      "https://github.com/kcln243107/DeepSeek-Harness-Android/releases/latest/download/MANIFEST.txt"
 
     /** 备用清单地址：latest 发布未附带 MANIFEST.txt 时回退到带清单的历史发布。 */
     const val DEFAULT_MANIFEST_FALLBACK_URL =
-      "https://github.com/YOYOFeelings/DeepSeek-Harness-Android/releases/download/v0.10.8-yoyo/MANIFEST.txt"
+      "https://github.com/kcln243107/DeepSeek-Harness-Android/releases/download/v0.11.4/MANIFEST.txt"
 
     /** 默认激活更新源 id（持久化配置缺省时使用 akaere）。 */
     const val DEFAULT_MIRROR_ID = "akaere"

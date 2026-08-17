@@ -19,8 +19,8 @@ import java.net.URL
 class ApkUpdateManager(private val context: Context) {
 
   companion object {
-    const val REPO_URL = "https://github.com/YOYOFeelings/DeepSeek-Harness-Android"
-    const val RELEASE_API = "https://api.github.com/repos/YOYOFeelings/DeepSeek-Harness-Android/releases/latest"
+    const val REPO_URL = "https://github.com/kcln243107/DeepSeek-Harness-Android"
+    const val RELEASE_API = "https://api.github.com/repos/kcln243107/DeepSeek-Harness-Android/releases/latest"
     const val APK_FILE_NAME = "deepseek-harness-update.apk"
 
     private const val PREFS = "dsh_shell"

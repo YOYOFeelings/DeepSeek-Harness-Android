@@ -37,6 +37,8 @@ class EngineManager(private val context: Context, private val pickToken: String?
     }
   private val nodeBin = File(usrDir, "bin/node")
   private val dshBin = File(usrDir, "lib/node_modules/@deepseek-ai/dsh/lib/bin.js")
+  /** ensurePrivateDshData() 同步锁：防止 MainActivity 引导线程与 EngineService 看门狗线程并发写 DSH_HOME 标记文件。 */
+  private val dshDataLock = Any()
   private var engineProcess: Process? = null
 
   val engineReady: Boolean get() = nodeBin.exists()
@@ -205,6 +207,14 @@ class EngineManager(private val context: Context, private val pickToken: String?
    * 机制依赖 app 私有域（公共 FUSE 禁 symlink），绝不能整体迁移 DSH_HOME。
    */
   fun ensurePrivateDshData(): File {
+    synchronized(dshDataLock) {
+      doEnsurePrivateDshData()
+    }
+    return File(homeDir, ".dsh")
+  }
+
+  /** 内部实现（须在 dshDataLock 保护下调用）。 */
+  private fun doEnsurePrivateDshData(): File {
     val dshData = dshDataDir
     val privateDsh = File(homeDir, ".dsh")
     privateDsh.mkdirs()
