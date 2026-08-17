@@ -43,6 +43,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * 壳层 Activity（Flat Minimalist 设计）：启动后直接进入「终端」主页。
@@ -1401,7 +1402,7 @@ class MainActivity : ComponentActivity() {
       if (conn.responseCode != 200) return null
       // BUG-4 修复：仅对 text/html 响应注入 localStorage 代理脚本，
       //   跳过 JSON API / CSS / JS 等响应，防止脚本被前置破坏数据结构。
-      val contentType = conn.getHeaderField("Content-Type")?.lowercase()?.orEmpty()
+      val contentType = conn.getHeaderField("Content-Type")?.lowercase() ?: ""
       if (!contentType.contains("text/html")) return null
       val html = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
       if (html.isEmpty() || html.length > 4_000_000) return null
