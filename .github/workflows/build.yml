@@ -10,7 +10,11 @@ on:
         required: true
         default: ''
       version_override:
-        description: '覆盖版本号（可选，格式：x.y.z）'
+        description: '覆盖版本号（可选，格式：x.y.z；留空则自动计算）'
+        required: false
+        default: ''
+      version_code_override:
+        description: '覆盖 versionCode（可选，整数；留空则自动递增）'
         required: false
         default: ''
 
@@ -25,6 +29,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 全量拉取历史，用于计算相对 tag 的 commit 数
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -44,18 +50,79 @@ jobs:
           echo "快照大小:"
           ls -lh app/src/main/assets/snapshot.tar.xz
 
-      - name: Determine version
+      # ── 版本自动计算与写入 ─────────────────────────────────────────────
+      # 策略：
+      #   1. 若 workflow_dispatch 提供了 version_override → 直接采用（可手动指定任意版本）
+      #   2. 否则从 build.gradle.kts 读取 BASE_VERSION + BASE_CODE
+      #   3. 找到最近的同类 tag（如 v0.11.x-fix），计算从该 tag 起的 commit 数 N
+      #   4. 新 versionCode = BASE_CODE + N；新 versionName = BASE_VERSION 不变
+      #   5. 写回 build.gradle.kts，使源码与构建产物版本号同步
+      - name: Auto-determine version and bump build.gradle.kts
         id: version
         run: |
-          VERSION_NAME=$(grep 'versionName' app/build.gradle.kts | grep -oE '"[^"]+"' | tail -1 | tr -d '"')
-          VERSION_CODE=$(grep 'versionCode' app/build.gradle.kts | grep -oE '[0-9]+' | head -1)
+          set -euo pipefail
+
+          # ── 阶段 1：确定最终版本号 ──────────────────────────────────
           if [[ -n "${{ inputs.version_override }}" ]]; then
+            # 手动覆盖：直接使用传入的值，versionCode 可选覆盖
             VERSION_NAME="${{ inputs.version_override }}"
-            VERSION_CODE=$((VERSION_CODE + 1))
+            if [[ -n "${{ inputs.version_code_override }}" ]]; then
+              VERSION_CODE="${{ inputs.version_code_override }}"
+            else
+              # 没有明确 versionCode：取 gradle 当前值 +1
+              CURRENT_CODE=$(grep -oE 'versionCode\s*=\s*[0-9]+' app/build.gradle.kts | grep -oE '[0-9]+')
+              VERSION_CODE=$(( CURRENT_CODE + 1 ))
+            fi
+            echo "使用手动覆盖版本: $VERSION_NAME (code=$VERSION_CODE)"
+          else
+            # 自动计算：从 gradle 读取基准版本，commit 数追加到 code
+            BASE_VERSION=$(grep -oE 'versionName\s*=\s*"[^"]+"' app/build.gradle.kts | grep -oE '"[^"]+"' | tr -d '"')
+            BASE_CODE=$(grep -oE 'versionCode\s*=\s*[0-9]+' app/build.gradle.kts | grep -oE '[0-9]+')
+
+            # 找最近的同类 tag（格式 v<major>.<minor>.<patch>-fix 或 v<major>.<minor>.<patch>）
+            RECENT_TAG=$(git tag --sort=-version:refname \
+              | grep -E "^v${BASE_VERSION/./\\.}" \
+              | head -1 \
+              || git tag --sort=-creatordate | grep -E "^v[0-9]+\.[0-9]+\.[0-9]+" | head -1 \
+              || echo "")
+
+            if [[ -n "$RECENT_TAG" ]]; then
+              # 从最近同类 tag 算起（允许重复构建：tag 内多次 push 递增 code）
+              COMMITS_SINCE=$(git rev-list --count "${RECENT_TAG}..HEAD")
+            else
+              # 无匹配 tag，从仓库起点算起
+              COMMITS_SINCE=$(git rev-list --count HEAD)
+            fi
+
+            VERSION_NAME="$BASE_VERSION"
+            VERSION_CODE=$(( BASE_CODE + COMMITS_SINCE ))
+            echo "自动计算版本: $VERSION_NAME (code=$VERSION_CODE, 基准=$BASE_CODE, 增量=$COMMITS_SINCE, tag=$RECENT_TAG)"
           fi
+
+          # ── 阶段 2：写回 build.gradle.kts ────────────────────────────
+          # 用 sed 精确替换版本行，避免破坏其他内容
+          sed -i \
+            -e "s/versionCode\s*=\s*[0-9]\+/versionCode = ${VERSION_CODE}/" \
+            -e "s/versionName\s*=\s*\"[^\"]*\"/versionName = \"${VERSION_NAME}\"/" \
+            app/build.gradle.kts
+
+          # 验证写入成功
+          NEW_NAME=$(grep -oE 'versionName\s*=\s*"[^"]+"' app/build.gradle.kts | grep -oE '"[^"]+"' | tr -d '"')
+          NEW_CODE=$(grep -oE 'versionCode\s*=\s*[0-9]+' app/build.gradle.kts | grep -oE '[0-9]+')
+          if [[ "$NEW_NAME" != "$VERSION_NAME" ]] || [[ "$NEW_CODE" != "$VERSION_CODE" ]]; then
+            echo "错误：版本写入失败" >&2
+            exit 1
+          fi
+
           echo "version_name=${VERSION_NAME}" >> $GITHUB_OUTPUT
           echo "version_code=${VERSION_CODE}" >> $GITHUB_OUTPUT
           echo "tag=v${VERSION_NAME}" >> $GITHUB_OUTPUT
+          echo "base_version=${BASE_VERSION:-unknown}" >> $GITHUB_OUTPUT
+
+      - name: Show bumped gradle
+        run: |
+          echo "=== build.gradle.kts 版本 ==="
+          grep -n "versionCode\|versionName" app/build.gradle.kts
 
       - name: Grant execute permission
         run: chmod +x gradlew
