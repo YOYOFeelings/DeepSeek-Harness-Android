@@ -259,6 +259,8 @@ class MainActivity : ComponentActivity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    // LogFox：尽早启动 logcat 抓取（本应用 UID），崩溃现场越完整越好。
+    runCatching { LogFox.startCapture(this) }
     // 全局崩溃兜底：崩溃前先写诊断上下文到 exceptions.log，再转发给系统原 handler
     runCatching {
       val prev = Thread.getDefaultUncaughtExceptionHandler()
@@ -292,6 +294,10 @@ class MainActivity : ComponentActivity() {
           val log = Logs.exceptionsLog(this@MainActivity)
           log.parentFile?.mkdirs()
           log.appendText(sb.toString())
+          // LogFox：写入完整崩溃快照（logcat 尾部 + 用户行为尾部 + 引擎状态 + stacktrace）
+          runCatching {
+            LogFox.writeCrashSnapshot(this@MainActivity, thread, throwable, engineManager, filesDir)
+          }
         } catch (_: Throwable) { /* 写日志失败不应再抛出第二波崩溃 */ }
         // 原封不动转发给系统：保持崩溃语义，绝不吞异常
         prev?.uncaughtException(thread, throwable)
@@ -308,6 +314,10 @@ class MainActivity : ComponentActivity() {
       override fun onCheckApkUpdate() = checkApkUpdateManually()
       override fun onClearCache() = clearCache()
       override fun onReloadAnnouncement() = loadAnnouncement()
+      override fun onOpenLogsPage() {
+        showTab(Tab.SETTINGS)
+        settingsScreen.openLogs()
+      }
     })
     contentFrame.addView(constrained(homeScreen), centeredParams())
     homeScreen.visibility = View.GONE
@@ -355,6 +365,20 @@ class MainActivity : ComponentActivity() {
       override fun onApplyBackground() = applyBackground()
       override fun onDownloadBackground(url: String) = downloadBackground(url)
       override fun onRandomBackground() = randomBackground()
+      override fun onClearLogs(): Boolean = LogFox.clearAllLogs(this@MainActivity)
+      override fun onViewLog(kind: String) {
+        LogFox.trackUser(this@MainActivity, "button", "view_log_$kind")
+        val tail = LogFox.tailLog(this@MainActivity, kind, 120)
+        val term = terminalScreen.terminal()
+        term.appendLine("----- ${kind} 末尾 -----")
+        if (tail.startsWith("(") || tail.isBlank()) term.appendLine(tail)
+        else for (line in tail.lineSequence()) term.appendLine(line)
+        term.appendLine("----- 日志结束 -----")
+      }
+      override fun onOpenLogsPage() {
+        showTab(Tab.SETTINGS)
+        settingsScreen.openLogs()
+      }
     })
     contentFrame.addView(constrained(settingsScreen), centeredParams())
     settingsScreen.visibility = View.GONE
@@ -399,6 +423,10 @@ class MainActivity : ComponentActivity() {
     registerDownloadReceiver()
     startWithApkCheck()
     loadAnnouncement()
+    // 上次异常退出提示（日志已由 LogFox 崩溃快照保存；经主页提示条展示）。
+    if (prefs.getBoolean(LogFox.PREF_CRASH_MARKER, false)) {
+      Logs.logE(this, "LogFox", "上次异常退出：crash-marker 为 true，完整日志已保存至设置 → 日志")
+    }
   }
 
   override fun onResume() {
@@ -437,6 +465,7 @@ class MainActivity : ComponentActivity() {
   override fun onDestroy() {
     super.onDestroy()
     runCatching { unregisterReceiver(apkDownloadReceiver) }
+    runCatching { LogFox.stopCapture() }
     webView.destroy()
     // 引擎由 EngineService 前台服务保活（后台继续运行），此处不再杀引擎。
   }
@@ -482,6 +511,7 @@ class MainActivity : ComponentActivity() {
    *   渐变 → GradientDrawable（两色 + 角度）；颜色 → ColorDrawable；默认 → 背景色。
    *   图片/渐变可叠加明暗遮罩（settings_bg_dim，0..80 → 黑色 alpha 0..~204）。 */
   private fun applyBackground() {
+    LogFox.trackUser(this, "other", "applyBackground")
     if (!::rootFrame.isInitialized) return
     val type = prefs.getString("settings_bg_type", "").orEmpty()
     val value = prefs.getString("settings_bg_value", "").orEmpty()
@@ -623,6 +653,7 @@ class MainActivity : ComponentActivity() {
 
   /** 下载 URL 图片并应用为背景（后台下载 → UI 线程持久化 + 应用 + 提示）。 */
   private fun downloadBackground(url: String) {
+    LogFox.trackUser(this, "other", "downloadBackground")
     if (!url.startsWith("http://") && !url.startsWith("https://")) {
       Toast.makeText(this, "链接需以 http:// 或 https:// 开头", Toast.LENGTH_SHORT).show()
       return
@@ -647,6 +678,7 @@ class MainActivity : ComponentActivity() {
 
   /** 随机获取图片并应用为背景：后台依次尝试候选图源，首个成功即应用；全部失败提示。 */
   private fun randomBackground() {
+    LogFox.trackUser(this, "other", "randomBackground")
     val candidates = listOf(
       "https://picsum.photos/1080/1920",
       "https://picsum.photos/1920/1080",
@@ -704,6 +736,7 @@ class MainActivity : ComponentActivity() {
 
   /** 入口：先执行 APK 版本检查，再进入正常启动流程。 */
   private fun startWithApkCheck() {
+    LogFox.trackUser(this, "update", "startWithApkCheck")
     lifecycleScope.launch {
       apkUpdateManager.checkUpdate(
         onResult = { info ->
@@ -740,6 +773,7 @@ class MainActivity : ComponentActivity() {
 
   /** 用户点击「立即更新」：未授权安装来源先引导设置，否则先测速选源再下载。 */
   private fun onUserChooseApkUpdate(url: String) {
+    LogFox.trackUser(this, "update", "onUserChooseApkUpdate")
     if (!apkUpdateManager.canInstall()) {
       apkDownloadPendingUrl = url
       openInstallPermissionSettings()
@@ -750,6 +784,7 @@ class MainActivity : ComponentActivity() {
 
   /** 先弹测速选源弹窗，确认后用所选源下载；取消则本次不下载（等待用户再次触发）。 */
   private fun chooseSourceThenDownload(url: String) {
+    LogFox.trackUser(this, "update", "chooseSourceThenDownload")
     showSpeedTestDialog { fastest ->
       if (fastest != null) {
         prefs.edit().putString("active_mirror_id", fastest.id).apply()
@@ -795,6 +830,7 @@ class MainActivity : ComponentActivity() {
   /** 手动检查 APK 更新（设置/主页「检查应用更新」按钮）：先检查，有新版弹版本框，
    *  点「立即更新」时再走测速选源弹窗（与启动自动检查流程统一）。 */
   private fun checkApkUpdateManually() {
+    LogFox.trackUser(this, "update", "checkApkUpdateManually")
     lifecycleScope.launch {
       apkUpdateManager.checkUpdate(
         onResult = { info ->
@@ -814,11 +850,13 @@ class MainActivity : ComponentActivity() {
 
   /** 语言切换后重建界面：各页面在 onCreate 时按当前语言取文案（默认中文 + 英文导航入口）。 */
   private fun rebuildUiLanguage() {
+    LogFox.trackUser(this, "other", "rebuildUiLanguage")
     recreate()
   }
 
   /** 拉取公告（主页公告卡）：结果回主线程更新 HomeScreen 公告区。 */
   private fun loadAnnouncement() {
+    LogFox.trackUser(this, "other", "loadAnnouncement")
     homeScreen.setAnnouncementLoading(true)
     AnnouncementManager.load(this) { text ->
       runOnUiThread {
@@ -1046,6 +1084,7 @@ class MainActivity : ComponentActivity() {
 
   /** 首次安装：直接在主页终端内跑安装/更新管线（权限说明已并入引导页，不再重复弹窗）。 */
   private fun runOnboarding() {
+    LogFox.trackUser(this, "other", "runOnboarding")
     val term = terminalScreen.terminal()
     term.appendLine(I18n.t(this, "===== dsh 首次安装 =====", "===== dsh first install ====="))
     term.appendLine(I18n.t(this, "安装 dsh 配置/插件并更新到最新版…", "Installing dsh config, plugins, and updating to the latest version…"))
@@ -1289,6 +1328,7 @@ class MainActivity : ComponentActivity() {
 
   /** 检查更新（合并到主页终端）：先测速选源，确认后再跑在线更新管线，日志流式输出到主页终端。 */
   private fun runCheckUpdate() {
+    LogFox.trackUser(this, "update", "runCheckUpdate")
     showSpeedTestDialog { fastest ->
       if (fastest != null) {
         updateManager.activeMirror = fastest
@@ -1302,6 +1342,7 @@ class MainActivity : ComponentActivity() {
 
   /** 用已选源跑在线更新管线：后台线程等待完成，带 3 分钟超时防永久卡死。 */
   private fun runRuntimeUpdate() {
+    LogFox.trackUser(this, "update", "runRuntimeUpdate")
     val term = terminalScreen.terminal()
     term.appendDetail("开始检查更新")
     val done = AtomicBoolean(false)
@@ -1330,6 +1371,7 @@ class MainActivity : ComponentActivity() {
 
   /** 安装/升级运行时环境（合并到主页终端）：后台线程跑环境安装管线，实时日志输出到主页终端。 */
   private fun runInstallEnv() {
+    LogFox.trackUser(this, "update", "runInstallEnv")
     val term = terminalScreen.terminal()
     term.appendDetail("开始安装/升级运行时环境")
     envManager.installLatest(
@@ -1393,6 +1435,7 @@ class MainActivity : ComponentActivity() {
   /** 用户主动重启引擎：清空旧日志 → 停旧进程 → 强制启动 → 流式输出日志到控制台。
    *  若上一次流程仍在进行，也会明确提示，不再静默无输出。 */
   private fun restartEngine() {
+    LogFox.trackUser(this, "engine", "restartEngine")
     val term = terminalScreen.terminal()
     if (engineFlowRunning.get()) {
       term.appendLine("上一次引擎流程仍在进行，请稍候再试")
@@ -1418,6 +1461,7 @@ class MainActivity : ComponentActivity() {
 
   /** Engine-first flow: 复用已在跑的引擎，否则解压快照/修复架构并启动内嵌引擎，轮询就绪。 */
   private fun startEngineFlow() {
+    LogFox.trackUser(this, "engine", "startEngineFlow")
     if (!engineFlowRunning.compareAndSet(false, true)) return
     Thread {
       try {
@@ -1488,6 +1532,7 @@ class MainActivity : ComponentActivity() {
 
   /** 工作目录选择：未授 All Files Access 先引导，否则直接 SAF 选择。 */
   private fun pickDirectory() {
+    LogFox.trackUser(this, "page", "pickDirectory")
     if (Build.VERSION.SDK_INT < 30) {
       terminalScreen.terminal().appendLine("Android 10 及以下不支持选择外部目录")
       return
@@ -1501,6 +1546,7 @@ class MainActivity : ComponentActivity() {
 
   /** 打开引擎 Web 界面（WebView 覆盖层淡入；顶部含刷新/外部浏览器/关闭）。 */
   private fun openWeb() {
+    LogFox.trackUser(this, "page", "openWeb")
     Thread {
       val probe = EngineProbe.check()
       if (!probe.optBoolean("running", false)) {
@@ -1830,8 +1876,18 @@ class MainActivity : ComponentActivity() {
     else terminalScreen.terminal().appendLine("通知权限仅 Android 13+ 需要")
   }
 
-  /** Web 覆盖层：顶栏（标题 + 刷新 + 外部浏览器 + 关闭）+ WebView。 */
+  /** Web 覆盖层：顶栏（标题 + 刷新 + 外部浏览器 + 关闭）+ WebView。
+   *  构建 Web 覆盖层；部分 OEM ROM 无/异常 WebView 时降级为空覆盖层，不阻断启动。 */
   private fun buildWebOverlay(): FrameLayout {
+    return try {
+      buildWebOverlayContent()
+    } catch (t: Throwable) {
+      Logs.logE(this, "web", "WebView overlay build failed, degraded to empty overlay", t)
+      FrameLayout(this).apply { visibility = View.GONE }
+    }
+  }
+
+  private fun buildWebOverlayContent(): FrameLayout {
     val overlay = FrameLayout(this).apply { visibility = View.GONE }
     val container = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
     val topBar = LinearLayout(this).apply {
@@ -2053,6 +2109,7 @@ class MainActivity : ComponentActivity() {
   /** Tab 切换：内容层三屏互斥显隐，目标屏淡入 + 上移过渡。 */
   private fun showTab(tab: Tab) {
     currentTab = tab
+    LogFox.trackUser(this, "nav", tab.name)
     refreshNavHighlight(tab)
     val screens = mapOf(
       Tab.HOME to homeScreen,
@@ -2158,6 +2215,10 @@ class MainActivity : ComponentActivity() {
             Logs.terminalLog(this) to "terminal.log",
             Logs.terminalDetailLog(this) to "terminal-detail.log",
             Logs.exceptionsLog(this) to "exceptions.log",
+            LogFox.userActionsLog(this) to "user-actions.log",
+            LogFox.userStatsFile(this) to "user-stats.txt",
+            LogFox.logcatLog(this) to "logcat.log",
+            LogFox.crashSnapshot(this) to "crash-snapshot.txt",
           )) {
             if (!f.exists()) continue
             zos.putNextEntry(java.util.zip.ZipEntry(name))
@@ -2165,9 +2226,11 @@ class MainActivity : ComponentActivity() {
             zos.closeEntry()
           }
           zos.putNextEntry(java.util.zip.ZipEntry("env.txt"))
+          val pkg = try { packageManager.getPackageInfo(packageName, 0) } catch (_: Throwable) { null }
           zos.write(
             ("Android " + Build.VERSION.RELEASE + " / SDK " + Build.VERSION.SDK_INT + "\n" +
-              "ABI " + Build.SUPPORTED_ABIS.joinToString() + "\n").toByteArray(),
+              "ABI " + Build.SUPPORTED_ABIS.joinToString() + "\n" +
+              "app versionName " + (pkg?.versionName ?: "?") + " / versionCode " + (pkg?.longVersionCode ?: "?") + "\n").toByteArray(),
           )
           zos.closeEntry()
         }

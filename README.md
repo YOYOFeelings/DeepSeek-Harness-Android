@@ -8,8 +8,8 @@
 > ⚠️ **重要说明：这是一个 fork / 二改版本。**
 > 本项目由 [YOYOFeelings](https://github.com/YOYOFeelings)（中文昵称「孤独的」）在
 > [kelai141/dsh-mobile-apk](https://github.com/kelai141/dsh-mobile-apk) 基础上二次开发维护，
-> 在保留原版全部能力的同时，修复了若干稳定性问题并新增了多项易用性功能。
-> 详细改动见下文「二改新增功能」与文末「二改 / Fork 说明」。
+> 在保留原版全部能力的同时，持续修复稳定性问题并迭代新功能。
+> 详情见文末「二改 / Fork 说明」。
 
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的安卓壳：WebView 移动 UI 覆盖
 **内嵌 Termux 运行时快照**（解压即跑，无需 Termux app）、SAF 目录桥、保活前台服务、**加固的引擎看门狗**、
@@ -26,49 +26,19 @@
 
 ---
 
-## 二改新增功能（相对原版的增强与修复）
-
-相比上游 `dsh-mobile-apk`，本 fork 新增 / 修复了以下内容：
-
-1. **加固的引擎看门狗**（引擎卡死自动重启容错）
-   - 对引擎连续失败进行**容错计数**，配合重启退避，避免无限快速重启死循环；
-   - **Web 页面打开期间豁免自动重启**：浏览 / 操作网页时即使引擎异常也不打断用户，
-     等页面关闭后再按策略恢复。
-2. **修复「Web 保存配置文件导致引擎卡死」**
-   - 修复了在 Web UI 中保存配置文件会导致引擎卡死（hang）的问题，已实测验证。
-3. **存储占用统计与一键清理**
-   - 在应用内查看引擎运行时（data / cache）的磁盘占用明细；
-   - 提供**一键清理**缓存 / 无用数据的入口，释放存储空间。
-4. **主页状态卡**
-   - 主页新增状态卡片，一眼看到：**引擎延迟**、**运行时长**、**数据占用**、**缓存大小**。
-5. **首次进入引导页**
-   - 首次启动展示引导页，介绍基本用法并**提示权限注意事项**，降低上手门槛。
-6. **权限管理页**
-   - 集中展示 **通知 / 文件访问 / 网络** 权限的状态；
-   - 提供**去系统设置撤销授权**的直达入口。
-7. **查看引擎日志入口**
-   - 可直接从 UI 打开并查看引擎日志输出，方便排查问题。
-8. **关于页单列纵向布局（v0.11.0）**
-   - 关于页改为**全屏单列纵向布局**，所有操作按钮完整可见、不再被裁剪；
-   - 元素按顺序排列：返回导航 → Logo + 名称 + 版本号 → 系统信息 → 全部操作按钮。
-9. **终端 ASCII 进度条（v0.11.0）**
-   - 下载 / 安装进度改为终端内 ASCII 进度条，实时原地刷新，不再出现换行异常。
-10. **引擎重启优化（v0.11.0）**
-    - 引擎已下载 / 就绪后，点击「重启引擎」**直接重启**，不再重复下载。
-
----
-
 ## 项目简介
 
-一个 APK 开箱即用：**内嵌完整 Termux 运行时快照**（node + bash + coreutils + dsh + 插件），首启解压即用、完全离线；**运行时在线更新**（manifest 驱动，snapshot 热替换，SHA256 校验 → 原子切换 → 自动重启，无需更新 APK）；**双 ABI 快照自动匹配**（arm64 / x86_64 设备在线下载对应架构，解决「x86_64 快照在 arm64 设备上无法启动」）；**多镜像源并发测速**与限量回退（遇源不可用时自动回退至多 3 个源，不再无限换源）。
+一个 APK 开箱即用：
 
 - **内嵌运行时**：随包 ~70MB xz 快照（node + bash + coreutils + dsh + 插件）；首启约 10 秒解压、
   从应用自身目录启动引擎；**完全离线**；
 - **移动 UI**：系统 WebView 加载 `http://127.0.0.1:3080`，配响应式插件（手机端抽屉/sheet）；
 - **保活**：前台服务（"dsh 引擎运行中"）+ 5 秒看门狗（引擎崩溃自动重启）；
 - **在线更新**：manifest 驱动的快照热替换（下载 → sha256 → 原子切换 → 自动重启），
-  运行时可自更新而无需更新 APK；26 个内置国内加速源 + 自定义源，**并发测速自动选最快源**；
-- **SAF 桥**：`pickDirectory` 把所选目录映射为真实路径（`/storage/emulated/0/…`）。
+  运行时可自更新而无需更新 APK；多内置国内加速源 + 自定义源，**并发测速自动选最快源**；
+- **SAF 桥**：`pickDirectory` 把所选目录映射为真实路径（`/storage/emulated/0/…`）；
+- **内置日志系统（LogFox）**：私有目录存储、50MB 轮转裁剪、logcat 抓取、用户行为跟踪、崩溃快照，
+  设置 → 日志 页可查看 / 统计 / 导出。
 
 ---
 
@@ -77,24 +47,25 @@
 ```text
 DeepSeek-Harness-Android/
 ├── app/
-│   ├── build.gradle.kts          ← AGP 8.9.x, Kotlin 2.0.x, minSdk 26, targetSdk 36
+│   ├── build.gradle.kts          ← AGP, Kotlin, minSdk 26, targetSdk 34
 │   └── src/main/
 │       ├── AndroidManifest.xml
 │       ├── assets/
 │       │   ├── snapshot.tar.xz   ← 内嵌 Termux 运行时快照（~70MB xz 压缩）
 │       │   └── snapshot.sha256   ← 快照指纹（防升级后重解压覆盖）
 │       ├── java/com/dshmobile/shell/
-│       │   ├── MainActivity.kt       ← 入口：引导 / 引擎启动 / 在线更新 / 弹窗
+│       │   ├── MainActivity.kt       ← 入口：引导 / 引擎启动 / 在线更新 / 弹窗 / 日志埋点
 │       │   ├── AndroidBridge.kt      ← JS 桥协议（checkEngine/pickDirectory/saveConfig 等）
 │       │   ├── EngineManager.kt      ← 快照解压 / ELF 架构校验 / 引擎进程管理
 │       │   ├── UpdateManager.kt      ← 运行时快照在线更新（manifest 拉取 + 镜像测速 + 下载 + 校验 + 切换）
 │       │   ├── ApkUpdateManager.kt   ← APK 自更新（版本检查 + 下载 + 安装）
+│       │   ├── LogFox.kt             ← 内置日志采集（用户行为 / logcat / 崩溃快照 / 50MB 轮转）
 │       │   ├── SnapshotExtractor.kt  ← xz 解压引擎（带进度回调）
 │       │   ├── RuntimePermissions.kt ← 可执行权限（exec 位 / Android 私有 exec 属性）
 │       │   ├── TerminalView.kt       ← 终端模拟日志面板（ScrollView + TextView）
 │       │   ├── TerminalScreen.kt     ← 终端页（底部导航 Tab 3）
-│       │   ├── HomeScreen.kt         ← 主页（状态卡 + 公告 + 操作按钮）
-│       │   ├── SettingsScreen.kt     ← 设置页（更新源 / 镜像测速 / 存储 / 关于）
+│       │   ├── HomeScreen.kt         ← 主页（状态卡 + 公告 + 崩溃提示 + 操作按钮）
+│       │   ├── SettingsScreen.kt     ← 设置页（通用 / 更新 / 存储 / 权限 / 外观 / 日志）
 │       │   ├── PluginsScreen.kt      ← 插件管理页
 │       │   ├── DialogUi.kt           ← 统一弹窗（Flat Minimalist 圆角白卡）
 │       │   ├── I18n.kt               ← 中英文国际化
@@ -107,7 +78,7 @@ DeepSeek-Harness-Android/
 ├── docs/
 │   └── design.md                  ← 壳 APK 设计文档（桥协议 / 权限 / 页面结构）
 ├── ANNOUNCEMENT.md                ← 版本更新公告（中英双语，主页可查）
-├── PITFALLS.md                    ← 踩坑记录（MANIFEST.txt 分发 / 快照指纹 / 架构匹配等）
+├── PITFALLS.md                    ← 踩坑记录
 ├── NOTICE.md                      ← 主页公告（新闻动态）
 ├── README.md                      ← 本文件
 ├── build.gradle.kts               ← 根构建脚本
@@ -154,9 +125,8 @@ cp snapshot/snapshot.tar.xz app/src/main/assets/snapshot.tar.xz
 1. App 拉取 GitHub Releases 的 **`MANIFEST.txt`** 作为发布清单，每行一行
    `sha256 path size`（发布运行时快照的校验与地址信息）；
 2. 按设备 **ABI** 匹配对应的 `snapshot-{arm64|x86_64}.tar.xz` 资产；
-3. 经所选更新源下载：内置**多镜像源**，默认 **akaere**（`https://cdn.akaere.online/`），
-   并保留 `gh-proxy`、官方直连等可选源；选源使用**自动测速**，不可用的源会自动跳过，
-   也可在「更新」页手动切换或添加自定义加速前缀；
+3. 经所选更新源下载：内置**多镜像源** + 自定义源，选源使用**自动测速**，
+   不可用的源会自动跳过，也可在「更新」页手动切换或添加自定义加速前缀；
 4. 下载完成后先做 **SHA-256 校验** → 解压到 staging 目录（**不碰线上目录**）→
    **原子切换** `usr`（`usr` → `usr-old` → 新 `usr`）→ 杀掉旧引擎 → 看门狗用新运行时重启。
 
@@ -200,16 +170,5 @@ MIT 协议。版权同时署名 **kelai141**（原作者）与 **YOYOFeelings**�
 
 本仓库是 `kelai141/dsh-mobile-apk` 的 **fork / 二改版本**，由 YOYOFeelings（孤独的）二次开发维护，
 继续遵循 **MIT 协议**，完整保留并署名原作者。
-
-主要新增 / 修复功能概览：
-
-- 加固的引擎看门狗（连续失败容错、Web 页面打开期间豁免自动重启）；
-- 修复 Web 保存配置文件导致引擎卡死；
-- 存储占用统计与一键清理；
-- 主页状态卡（引擎延迟 / 运行时长 / 数据占用 / 缓存大小）；
-- 首次进入引导页（含权限注意事项）；
-- 权限管理页（通知 / 文件访问 / 网络权限状态与去授权入口）；
-- 查看引擎日志入口；
-- 关于页单列纵向布局、终端 ASCII 进度条、引擎重启优化（v0.11.0）。
 
 感谢原作者 kelai141 的开源贡献；本 fork 在尊重原版权的前提下继续演进，欢迎使用与反馈。

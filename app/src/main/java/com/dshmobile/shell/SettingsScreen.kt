@@ -49,6 +49,9 @@ class SettingsScreen(context: Context, private val callbacks: Callbacks) : Linea
     fun onApplyBackground()       // 按已保存的背景设置重新应用根背景
     fun onDownloadBackground(url: String)   // 下载 URL 图片并应用为背景
     fun onRandomBackground()                // 随机获取一张图片并应用为背景
+    fun onClearLogs(): Boolean              // 清空全部日志，返回是否成功
+    fun onViewLog(kind: String)             // 查看日志尾部（user/exceptions/logcat/crash）
+    fun onOpenLogsPage()                    // 切到设置并打开日志子页
   }
 
   private val prefs = context.getSharedPreferences("dsh_shell", Context.MODE_PRIVATE)
@@ -85,6 +88,7 @@ class SettingsScreen(context: Context, private val callbacks: Callbacks) : Linea
       ListEntry(I18n.t(context, "存储", "Storage"), R.drawable.ic_open) { buildStorage(it) },
       ListEntry(I18n.t(context, "权限", "Permissions"), R.drawable.ic_shield) { buildPermissions(it) },
       ListEntry(I18n.t(context, "外观", "Appearance"), R.drawable.ic_info) { openAppearance() },
+      ListEntry(I18n.t(context, "日志", "Logs"), R.drawable.ic_log) { openLogs() },
     )
     for (i in entries.indices step 2) {
       val row = LinearLayout(context).apply {
@@ -224,6 +228,11 @@ class SettingsScreen(context: Context, private val callbacks: Callbacks) : Linea
   /** 若当前正停留在「外观」子页则重建它（选图/换色/恢复默认后刷新选中态）。 */
   fun refreshAppearance() {
     if (currentPageTitle == I18n.t(context, "外观", "Appearance")) openAppearance()
+  }
+
+  /** 打开「日志」子页（外部（主页崩溃提示等）跳转用）。 */
+  fun openLogs() {
+    showPage(I18n.t(context, "日志", "Logs")) { buildLogs(it) }
   }
 
   // ============ 子页内容 ============
@@ -529,7 +538,115 @@ class SettingsScreen(context: Context, private val callbacks: Callbacks) : Linea
     downloadHistoryText.text = sb.toString()
   }
 
-  /** 存储：统计应用数据/缓存/公共导出仓库占用，提供一键清理缓存。后台计算避免阻塞 UI。 */
+  /** 日志：导出 / 查看各类日志尾部 / 统计 / 目录大小 / 清空。
+   *  所有动作均经 LogFox.trackUser 记录按钮点击。 */
+  private fun buildLogs(body: LinearLayout) {
+    body.addView(sectionLabel(I18n.t(context, "导出与查看", "Export & View")))
+    body.addView(
+      flatButton(I18n.t(context, "导出调试日志 (zip)", "Export debug logs (zip)"), accent = true) {
+        LogFox.trackUser(context, "button", "export_logs")
+        callbacks.onExportDebugLogs()
+      },
+      LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) },
+    )
+
+    val row1 = LinearLayout(context).apply {
+      orientation = LinearLayout.HORIZONTAL
+      layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) }
+    }
+    row1.addView(
+      flatButton(I18n.t(context, "用户行为日志", "User actions"), accent = false) {
+        LogFox.trackUser(context, "button", "view_user_actions")
+        callbacks.onViewLog("user")
+      },
+      LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(6) },
+    )
+    row1.addView(
+      flatButton(I18n.t(context, "异常日志", "Exceptions"), accent = false) {
+        LogFox.trackUser(context, "button", "view_exceptions")
+        callbacks.onViewLog("exceptions")
+      },
+      LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f),
+    )
+    body.addView(row1)
+
+    val row2 = LinearLayout(context).apply {
+      orientation = LinearLayout.HORIZONTAL
+      layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) }
+    }
+    row2.addView(
+      flatButton(I18n.t(context, "logcat", "logcat"), accent = false) {
+        LogFox.trackUser(context, "button", "view_logcat")
+        callbacks.onViewLog("logcat")
+      },
+      LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(6) },
+    )
+    row2.addView(
+      flatButton(I18n.t(context, "崩溃快照", "Crash snapshot"), accent = false) {
+        LogFox.trackUser(context, "button", "view_crash_snapshot")
+        callbacks.onViewLog("crash")
+      },
+      LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f),
+    )
+    body.addView(row2)
+
+    body.addView(sectionLabel(I18n.t(context, "统计与维护", "Stats & Maintenance")), LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
+      topMargin = dp(8)
+    })
+
+    // 日志目录大小（进入本页实时统计）
+    val sizeText = TextView(context).apply {
+      textSize = 12f
+      setTextColor(resources.getColor(R.color.text_secondary, null))
+      layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) }
+    }
+    body.addView(sizeText)
+    Thread {
+      val totalBytes = try {
+        val dir = Logs.dir(context)
+        if (dir.exists()) dir.walkTopDown().filter { it.isFile }.sumOf { it.length() } else 0
+      } catch (_: Throwable) { 0 }
+      post {
+        sizeText.text = I18n.t(context, "日志目录大小：", "Log dir size: ") + (totalBytes / 1024) + " KB" +
+          if (totalBytes >= 50L * 1024 * 1024) "  (已达 50MB 上限，将自动裁剪最早日志)" else ""
+      }
+    }.start()
+
+    body.addView(
+      flatButton(I18n.t(context, "查看日志统计", "View log stats"), accent = false) {
+        LogFox.trackUser(context, "button", "view_stats")
+        DialogUi.show(
+          context,
+          I18n.t(context, "日志统计", "Log stats"),
+          LogFox.statsSummary(context),
+          iconRes = R.drawable.ic_log,
+          actions = listOf(DialogUi.Action(I18n.t(context, "关闭", "Close"))),
+        )
+      },
+      LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) },
+    )
+    body.addView(
+      flatButton(I18n.t(context, "清空全部日志", "Clear all logs"), accent = false) {
+        LogFox.trackUser(context, "button", "clear_logs")
+        DialogUi.show(
+          context,
+          I18n.t(context, "清空日志", "Clear logs"),
+          I18n.t(context, "将删除全部日志（含 logcat 与崩溃快照），确认？", "This deletes ALL logs (incl. logcat & crash snapshot). Continue?"),
+          iconRes = R.drawable.ic_delete,
+          actions = listOf(
+            DialogUi.Action(I18n.t(context, "取消", "Cancel")),
+            DialogUi.Action(I18n.t(context, "清空", "Clear"), accent = true) {
+              val ok = callbacks.onClearLogs()
+              showToast(if (ok) I18n.t(context, "日志已清空", "Logs cleared") else I18n.t(context, "清空失败", "Clear failed"))
+            },
+          ),
+        )
+      },
+      LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) },
+    )
+  }
+
+  /** 存储：应用数据/缓存/公共导出仓库占用统计 + 清理缓存。 */
   private fun buildStorage(body: LinearLayout) {
     val dataMb = TextView(context)
     val cacheMb = TextView(context)

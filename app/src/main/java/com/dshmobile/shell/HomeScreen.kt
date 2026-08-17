@@ -40,6 +40,8 @@ class HomeScreen(
     fun onClearCache()
     /** 重新拉取公告（点击公告卡触发）。 */
     fun onReloadAnnouncement()
+    /** 打开日志子页（崩溃提示条点击跳转）。 */
+    fun onOpenLogsPage()
   }
 
   private val envManager = EnvManager(context)
@@ -54,6 +56,9 @@ class HomeScreen(
 
   /** 公告卡容器（无公告时 GONE）。 */
   private val announcementCard: LinearLayout
+
+  /** 上次异常退出提示条（crash-marker 为 true 时显示）。 */
+  private val crashBar: LinearLayout
 
   init {
     orientation = LinearLayout.VERTICAL
@@ -124,6 +129,41 @@ class HomeScreen(
     }
     content.addView(announcementCard)
     announcementCard.visibility = View.GONE
+
+    // ============ 0.5 崩溃提示条 ============
+    crashBar = LinearLayout(context).apply {
+      orientation = LinearLayout.HORIZONTAL
+      gravity = Gravity.CENTER_VERTICAL
+      setPadding(dp(14), dp(12), dp(14), dp(12))
+      background = resources.getDrawable(R.drawable.bg_card, null)
+      isClickable = true
+      isFocusable = true
+      layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) }
+    }.apply {
+      addView(
+        TextView(context).apply {
+          text = I18n.t(context, "上次异常退出 · 日志已保存", "Previous abnormal exit · logs saved")
+          textSize = 12f
+          typeface = Typeface.DEFAULT_BOLD
+          setTextColor(resources.getColor(R.color.text, null))
+          layoutParams = LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
+        },
+      )
+      addView(
+        TextView(context).apply {
+          text = I18n.t(context, "查看/导出", "View/Export")
+          textSize = 12f
+          typeface = Typeface.DEFAULT_BOLD
+          setTextColor(resources.getColor(R.color.accent, null))
+        },
+      )
+      setOnClickListener {
+        LogFox.trackUser(context, "button", "open_logs_from_crash_bar")
+        callbacks.onOpenLogsPage()
+      }
+    }
+    content.addView(crashBar)
+    crashBar.visibility = View.GONE
 
     // ============ 1. 状态卡 ============
     val statusContent = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
@@ -286,6 +326,9 @@ class HomeScreen(
   fun refresh() {
     post {
       refreshEnv()
+      // 崩溃提示条：依据 crash-marker 显隐。
+      val prefs = context.getSharedPreferences("dsh_shell", Context.MODE_PRIVATE)
+      crashBar.visibility = if (prefs.getBoolean(LogFox.PREF_CRASH_MARKER, false)) View.VISIBLE else View.GONE
     }
     // 状态卡：后台探测引擎延迟/运行时长 + 统计存储，结果 post 回主线程更新。
     Thread {

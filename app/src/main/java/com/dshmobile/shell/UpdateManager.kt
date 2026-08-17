@@ -89,14 +89,22 @@ class UpdateManager(private val context: Context) {
     try {
       for (m in mirrors) {
         pool.execute {
-          val ms = try {
-            measureMirror(m)
+          try {
+            val ms = try {
+              measureMirror(m)
+            } catch (_: Throwable) {
+              null
+            }
+            // 关键：ConcurrentHashMap 禁止 null 值，null 直接 put 会抛 NPE 导致
+            // 池线程未捕获异常 → 转发系统 handler → 整个应用闪退（一加 ACE5 等实测根因）。
+            // 只把「可用」的源写入结果；不可用(null)不写，由 line 108 的 !=null 过滤。
+            if (ms != null) results[m.id] = ms
+            onEach(m, ms)
           } catch (_: Throwable) {
-            null
+            // 兜底：任何意外异常都不得卡死 latch / 崩溃进程。
+          } finally {
+            latch.countDown()
           }
-          results[m.id] = ms
-          onEach(m, ms)
-          latch.countDown()
         }
       }
       latch.await(30, java.util.concurrent.TimeUnit.SECONDS)
