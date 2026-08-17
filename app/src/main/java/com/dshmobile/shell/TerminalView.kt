@@ -49,6 +49,15 @@ class TerminalView(context: Context, private val logFile: File? = null) : Scroll
   /** 上一行是否是实时进度行（total > 0）。只有连续的同 stage 进度行才能原地覆盖。 */
   private var lastLive: Boolean = false
 
+  /** 进度节流：上次实际派发 UI 的时间戳（SystemClock.uptimeMillis）。 */
+  private var lastProgressFlush = 0L
+
+  /** 进度节流窗口（毫秒）：窗口内合并多次进度，只派发最后一次。 */
+  private val progressThrottleMs = 250L
+
+  /** 进度节流：窗口内的待派发事件（stage/message/done/total），非空表示有挂起更新。 */
+  private var pendingProgress: Array<Any>? = null
+
   /** 日志文件写入锁：进度更新可能来自多个线程/协程，appendText 本身不是原子的。 */
   private val logLock = Any()
 
@@ -123,7 +132,7 @@ class TerminalView(context: Context, private val logFile: File? = null) : Scroll
         "[%s] %s… [%s] %.1f/%.1f MB %d%%",
         stage, message, bar, done / 1048576f, total / 1048576f, pct
       )
-      post {
+      throttleOrRun(stage, message, done, total) {
         val replace = lastStage == stage && lastLive
         if (replace) {
           // 移除上一行：截断到最后一个换行符之前，再追加新进度行，实现“原地刷新”。
@@ -140,7 +149,7 @@ class TerminalView(context: Context, private val logFile: File? = null) : Scroll
       }
     } else {
       val line = "[$stage] $message"
-      post {
+      throttleOrRun(stage, message, done, total) {
         textView.append(line + "\n")
         // 普通行会打断“连续进度行”的判定，后续进度需要另起一行。
         lastStage = null
@@ -150,6 +159,41 @@ class TerminalView(context: Context, private val logFile: File? = null) : Scroll
         mirrorToLog(line)
       }
     }
+  }
+
+  /**
+   * 进度更新节流合并：下载/解压进度回调每 chunk 一次，更新过快会塞满主线程消息队列
+   * 并触发大量磁盘写，导致 ANR/卡顿。本方法在 [progressThrottleMs] 窗口内合并多次进度，
+   * 只派发窗口内最后一次；距上次实际派发已超过窗口时立即执行。
+   * 可从任意线程调用（内部 post 到主线程执行）。
+   */
+  private fun throttleOrRun(stage: String, message: String, done: Long, total: Long, block: () -> Unit) {
+    val now = android.os.SystemClock.uptimeMillis()
+    if (pendingProgress != null) {
+      // 已有挂起更新：只更新待派发数据，不再 post
+      pendingProgress = arrayOf(stage, message, done, total)
+      return
+    }
+    val elapsed = now - lastProgressFlush
+    if (elapsed >= progressThrottleMs) {
+      lastProgressFlush = now
+      post(block)
+      return
+    }
+    // 距上次派发不足窗口：记录待派发，延迟到窗口到期再派发最后一次
+    pendingProgress = arrayOf(stage, message, done, total)
+    val remaining = progressThrottleMs - elapsed
+    postDelayed({
+      val p = pendingProgress
+      pendingProgress = null
+      // 把“上次派发时间”拨回窗口之前：下方 re-enter appendProgress 时 elapsed 已达窗口，
+      // 能立即 post 派发最后一次，且不会再进入节流/无限重排。
+      lastProgressFlush = android.os.SystemClock.uptimeMillis() - progressThrottleMs
+      if (p != null) {
+        // 用挂起的最新一次进度重新计算行并执行原块
+        appendProgress(p[0] as String, p[1] as String, p[2] as Long, p[3] as Long)
+      }
+    }, remaining)
   }
 
   /** 清空终端内容和日志文件，并重置进度行跟踪状态。 */

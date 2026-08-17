@@ -62,8 +62,10 @@ object DialogUi {
   }
 
   /** 展示自定义内容型弹窗并返回 dialog（供外部主动 dismiss，如测速动态列表）。
-   *  内容包进 ScrollView 并限制最大高度（约屏高 55%），源列表等长内容可上下滑动、
-   *  横竖屏均不超出屏幕（修复「测速弹窗无法滑动、看不到全部源」）。 */
+   *  内容包进 ScrollView 并限制最大高度（约屏可用高度 60%），源列表等长内容可上下滑动、
+   *  横竖屏均不超出屏幕（修复「测速弹窗无法滑动、看不到全部源」）。
+   *  [footer] 为固定在内容区下方、不随内容滚动的视图（如测速弹窗的「开始更新/重试」按钮），
+   *  保证长内容滚到底时操作按钮始终可见、可点（修复「按钮被内容顶出屏幕」）。 */
   fun show(
     context: Context,
     title: String,
@@ -72,6 +74,7 @@ object DialogUi {
     actions: List<Action> = emptyList(),
     cancelable: Boolean = true,
     onCancel: (() -> Unit)? = null,
+    footer: View? = null,
   ): AlertDialog = build(context, title, iconRes, actions, cancelable, onCancel) { root ->
     val scroll = ScrollView(context).apply {
       isVerticalScrollBarEnabled = true
@@ -79,11 +82,11 @@ object DialogUi {
     }
     content.layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
     scroll.addView(content, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-    // 最大高度：约屏幕高度的 55%（与 message 重载一致）。ScrollView 没有 maxHeight，
+    // 最大高度：约屏幕可用高度的 60%（与 message 重载一致）。ScrollView 没有 maxHeight，
     // 用限高容器在 onMeasure 阶段约束，长内容可滚动、不超出屏幕。
     val maxHeightPx = dp(
       context,
-      (context.resources.displayMetrics.heightPixels / context.resources.displayMetrics.density * 0.55f).toInt(),
+      (context.resources.displayMetrics.heightPixels / context.resources.displayMetrics.density * 0.60f).toInt(),
     )
     root.addView(
       MaxHeightLayout(context, maxHeightPx).apply {
@@ -91,6 +94,14 @@ object DialogUi {
       },
       LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT),
     )
+    if (footer != null) {
+      root.addView(
+        footer,
+        LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+          topMargin = dp(context, 10)
+        },
+      )
+    }
   }
 
   private fun build(

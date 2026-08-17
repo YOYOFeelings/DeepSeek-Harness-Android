@@ -1,5 +1,45 @@
 # DeepSeek Harness Android — 更新公告
 
+## v0.11.7
+
+**中文**
+
+v0.11.7 为**稳定性修复版**，重点修复不同设备下更新时的闪退 / 引擎无法启动问题，并重构更新交互：测速选源 → 自动选最快、可手动改选。
+
+- **更新过快不再闪退 / ANR**
+  - 终端进度回调改为「节流合并」（同一阶段至少间隔 ~250ms 才派发一次 UI 重排），下载/解压进度再快也不会刷屏卡死。
+- **不同比例设备下弹窗正常显示**
+  - 内容型弹窗统一限高约屏幕可用高度的 60%（基于 displayMetrics 动态计算，兼容横竖屏与超大字体），内容可上下滚动；
+  - 测速弹窗的「开始更新 / 重试」按钮固定在内容区下方、不随内容滚动，长内容滚到底也始终可见可点。
+- **更新交互重构（核心）**
+  - 检测到新版本先弹「版本更新」框；点击「立即更新」后**先关闭版本框**，再弹出「测速并选择更新源」框，两框不叠加；
+  - **并发检测所有更新源**，每源延迟实时刷新；
+  - 测速完成**自动选中最快可用源**，并可通过单选框**手动改选**，确认后开始更新；
+  - 所有源测速失败时按钮变为「重试」；再次失败给出明确的网络检查提示。
+- **关键流程防永久卡死**
+  - 更新/引导关键等待循环加入 180 秒超时上限，超时按失败处理并提示，不再无限阻塞。
+- **跨线程可见性加固**
+  - 更新源（激活源 / 自定义前缀）变量增加 volatile 可见性保证，避免并发读写导致更新异常。
+
+**English**
+
+v0.11.7 is a **stability fix release** addressing crashes / engine startup failures during updates on different devices, and reworks the update interaction: speed-test source selection → auto-pick the fastest, with manual override.
+
+- **No more crashes/ANR when updates run too fast**
+  - Terminal progress callbacks are now throttled & coalesced (same stage flushes at most every ~250ms), so fast download/extract progress no longer floods or freezes the UI.
+- **Dialogs render correctly on different screen ratios**
+  - Content dialogs are capped at ~60% of the usable screen height (computed from displayMetrics, compatible with portrait/landscape and large font scaling); content scrolls as needed;
+  - The speed-test dialog's "Start update / Retry" button is fixed below the scroll area and stays visible/tappable even when long content is scrolled.
+- **Update interaction rework (core)**
+  - New version first shows a "version update" dialog; tapping "Update now" **closes it first**, then opens the "Test & pick source" dialog — the two never stack;
+  - **All update sources are probed concurrently** with live per-source latency;
+  - The **fastest usable source is auto-selected** when testing completes, and users can **override via radio buttons**; update starts on confirmation;
+  - If all sources fail, the button becomes "Retry"; a repeated failure shows a clear network-check message.
+- **Key flows no longer hang forever**
+  - Critical wait loops now have a 180s timeout cap; on timeout the flow ends as failed with a prompt instead of blocking indefinitely.
+- **Cross-thread visibility hardening**
+  - Update source fields (active mirror / custom prefix) now use volatile visibility to avoid update anomalies from concurrent reads/writes.
+
 ## v0.11.6
 
 **中文**

@@ -242,8 +242,9 @@ class ApkUpdateManager(private val context: Context) {
    *  默认（未显式选择源时）以内置默认加速源兜底，并按「激活源优先 + 其余源 + 官方直连」构造
    *  多源回退队列（对 GitHub 直链做镜像解析），首个候选立即 enqueue；
    *  下载失败或产物无效时由 retryWithNextSource() 自动换源接力。 */
-  fun startDownload(downloadUrl: String): Long {
+  fun startDownload(downloadUrl: String, mirror: Mirror? = null): Long {
     val um = updateManager
+    if (mirror != null) um.activeMirror = mirror
     val active = um.activeMirror ?: um.mirrorById(UpdateManager.DEFAULT_MIRROR_ID)
     val all = um.allMirrors()
     val ordered = listOfNotNull(active) + all.filter { it.id != active?.id }

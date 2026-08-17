@@ -46,10 +46,10 @@ class UpdateManager(private val context: Context) {
   private var usedManifestUrl: String = DEFAULT_MANIFEST_URL
 
   /** 当前激活更新源（null = 未显式选择 → 更新时自动测速选最快源；UI/引导流程可显式赋值）。 */
-  var activeMirror: Mirror? = null
+  @Volatile var activeMirror: Mirror? = null
 
   /** 用户自定义加速前缀（UI「添加更新源」写入）。 */
-  var customPrefix: String? = null
+  @Volatile var customPrefix: String? = null
 
   /** 并发防护：同一时刻只允许一个更新流程在跑，重复触发直接拒绝。 */
   @Volatile private var updateRunning = false

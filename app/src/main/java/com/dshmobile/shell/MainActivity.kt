@@ -32,6 +32,7 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
+import android.widget.RadioButton
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
@@ -116,7 +117,7 @@ class MainActivity : ComponentActivity() {
       val url = apkDownloadPendingUrl
       if (url != null && apkUpdateManager.canInstall()) {
         apkDownloadPendingUrl = null
-        startApkDownload(url)
+        chooseSourceThenDownload(url)
       }
     }
 
@@ -363,7 +364,7 @@ class MainActivity : ComponentActivity() {
     apkDownloadPendingUrl?.let { url ->
       if (apkUpdateManager.canInstall()) {
         apkDownloadPendingUrl = null
-        startApkDownload(url)
+        chooseSourceThenDownload(url)
       }
     }
     // 引导页展示期间不启动引擎流程（等待「开始使用」）。
@@ -687,13 +688,25 @@ class MainActivity : ComponentActivity() {
     )
   }
 
-  /** 用户点击「立即更新」：未授权安装来源先引导设置，否则直接下载。 */
+  /** 用户点击「立即更新」：未授权安装来源先引导设置，否则先测速选源再下载。 */
   private fun onUserChooseApkUpdate(url: String) {
     if (!apkUpdateManager.canInstall()) {
       apkDownloadPendingUrl = url
       openInstallPermissionSettings()
     } else {
-      startApkDownload(url)
+      chooseSourceThenDownload(url)
+    }
+  }
+
+  /** 先弹测速选源弹窗，确认后用所选源下载；取消则本次不下载（等待用户再次触发）。 */
+  private fun chooseSourceThenDownload(url: String) {
+    showSpeedTestDialog { fastest ->
+      if (fastest != null) {
+        prefs.edit().putString("active_mirror_id", fastest.id).apply()
+        startApkDownload(url, fastest)
+      } else {
+        Toast.makeText(this, I18n.t(this, "已取消更新", "Update cancelled"), Toast.LENGTH_SHORT).show()
+      }
     }
   }
 
@@ -708,10 +721,10 @@ class MainActivity : ComponentActivity() {
     }
   }
 
-  /** 启动 DownloadManager 下载，并清除强制更新阻断标记（下载+安装流程接管）。 */
-  private fun startApkDownload(url: String) {
+  /** 启动 DownloadManager 下载（可选指定加速源），并清除强制更新阻断标记（下载+安装流程接管）。 */
+  private fun startApkDownload(url: String, mirror: Mirror? = null) {
     try {
-      apkUpdateManager.startDownload(url)
+      apkUpdateManager.startDownload(url, mirror)
       apkUpdatePending = false
       Toast.makeText(this, I18n.t(this, "已开始下载更新，完成后将自动安装", "Download started; it will be installed automatically when finished"), Toast.LENGTH_SHORT).show()
     } catch (t: Throwable) {
@@ -729,34 +742,23 @@ class MainActivity : ComponentActivity() {
     }
   }
 
-  /** 手动检查 APK 更新（设置/主页「检查应用更新」按钮）：先弹窗测速选最快源，再检查下载。 */
+  /** 手动检查 APK 更新（设置/主页「检查应用更新」按钮）：先检查，有新版弹版本框，
+   *  点「立即更新」时再走测速选源弹窗（与启动自动检查流程统一）。 */
   private fun checkApkUpdateManually() {
-    showSpeedTestDialog { fastest ->
-      if (fastest != null) {
-        prefs.edit().putString("active_mirror_id", fastest.id).apply()
-        terminalScreen.terminal().appendLine(
-          I18n.t(this, "已选择最快更新源：", "Fastest source selected: ") + fastest.name,
-        )
-      } else {
-        terminalScreen.terminal().appendLine(
-          I18n.t(this, "测速失败，将使用默认更新源重试", "Speed test failed; retrying with the default source"),
-        )
-      }
-      lifecycleScope.launch {
-        apkUpdateManager.checkUpdate(
-          onResult = { info ->
-            lastUpdateInfo = info
-            if (info.hasNew) {
-              presentApkUpdate(info)
-            } else {
-              Toast.makeText(this@MainActivity, I18n.t(this@MainActivity, "当前已是最新版本", "You're up to date"), Toast.LENGTH_SHORT).show()
-            }
-          },
-          onError = { err ->
-            Toast.makeText(this@MainActivity, I18n.t(this@MainActivity, "检查更新失败：", "Update check failed: ") + err, Toast.LENGTH_LONG).show()
-          },
-        )
-      }
+    lifecycleScope.launch {
+      apkUpdateManager.checkUpdate(
+        onResult = { info ->
+          lastUpdateInfo = info
+          if (info.hasNew) {
+            presentApkUpdate(info)
+          } else {
+            Toast.makeText(this@MainActivity, I18n.t(this@MainActivity, "当前已是最新版本", "You're up to date"), Toast.LENGTH_SHORT).show()
+          }
+        },
+        onError = { err ->
+          Toast.makeText(this@MainActivity, I18n.t(this@MainActivity, "检查更新失败：", "Update check failed: ") + err, Toast.LENGTH_LONG).show()
+        },
+      )
     }
   }
 
@@ -782,13 +784,10 @@ class MainActivity : ComponentActivity() {
     terminalScreen.setEngineStatus(running, detail)
   }
 
-  /** 更新源测速弹窗：逐源并发实测延迟并实时刷新，完成后回调最快源（全失败回调 null）。
-   *  满足「点击更新时弹窗自动检测各更新源速度并选择最快源进行更新」。
-   *  并发探测 + 进度条动画 + 所有源行可滚动（修复「弹窗无法滑动、看不到全部源」）。 */
+  /** 交互式测速选源弹窗：并发测速所有源，自动选最快，用户可单选框手动改选，确认后开始更新。 */
   private fun showSpeedTestDialog(onComplete: (Mirror?) -> Unit) {
     val um = UpdateManager.forPrefs(this)
     val sources = um.allMirrors()
-    val labels = mutableListOf<TextView>()
     val container = LinearLayout(this).apply {
       orientation = LinearLayout.VERTICAL
     }
@@ -810,35 +809,69 @@ class MainActivity : ComponentActivity() {
     }
     container.addView(statusText)
 
+    val radios = mutableListOf<RadioButton>()
+    val latencies = mutableListOf<TextView>()
     for (m in sources) {
       val row = LinearLayout(this).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
         setPadding(0, dp(4), 0, dp(4))
       }
-      row.addView(
-        TextView(this).apply {
-          text = m.name
-          textSize = 13f
-          typeface = Typeface.DEFAULT_BOLD
-          setTextColor(resources.getColor(R.color.text, null))
-          layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-        },
-      )
+      val i = radios.size
+      val radio = RadioButton(this).apply {
+        text = m.name
+        textSize = 13f
+        layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        setOnClickListener {
+          for (j in radios.indices) radios[j].isChecked = (j == i)
+        }
+      }
+      radios.add(radio)
+      row.addView(radio)
       val latency = TextView(this).apply {
         text = I18n.t(this@MainActivity, "测速中…", "testing…")
         textSize = 12f
         setTextColor(resources.getColor(R.color.text_secondary, null))
       }
-      labels.add(latency)
+      latencies.add(latency)
       row.addView(latency)
       container.addView(row)
     }
 
     val completed = java.util.concurrent.atomic.AtomicBoolean(false)
-    val dialog = DialogUi.show(
+    var retryAction: (() -> Unit)? = null
+    // 测速失败次数：全失败时按钮变「重试」，再次失败给出更明确的错误提示（区分首次/多次失败）
+    var failedAttempts = 0
+    // dialog 需先声明（可空 var），供确认按钮点击时 dismiss；K2 不允许 lambda 前向引用后声明的局部 val
+    var dialog: android.app.AlertDialog? = null
+
+    val confirmBtn = TextView(this).apply {
+      text = I18n.t(this@MainActivity, "正在测速…", "Testing…")
+      textSize = 14f
+      typeface = Typeface.DEFAULT_BOLD
+      gravity = Gravity.CENTER
+      setPadding(dp(16), dp(10), dp(16), dp(10))
+      background = resources.getDrawable(R.drawable.bg_button_accent, null)
+      setTextColor(resources.getColor(R.color.surface, null))
+      isClickable = true
+      isFocusable = true
+      isEnabled = false
+      setOnClickListener {
+        val retry = retryAction
+        if (retry != null) {
+          retry()
+        } else if (completed.compareAndSet(false, true)) {
+          val idx = radios.indexOfFirst { it.isChecked }
+          val selected = if (idx >= 0 && idx < sources.size) sources[idx] else null
+          dialog?.dismiss()
+          onComplete(selected)
+        }
+      }
+    }
+
+    dialog = DialogUi.show(
       this,
-      title = I18n.t(this, "检测各更新源速度…", "Testing update sources…"),
+      title = I18n.t(this, "测速并选择更新源", "Test & pick source"),
       content = container,
       iconRes = R.drawable.ic_speed,
       actions = listOf(
@@ -848,51 +881,53 @@ class MainActivity : ComponentActivity() {
       ),
       cancelable = true,
       onCancel = { if (completed.compareAndSet(false, true)) onComplete(null) },
+      footer = confirmBtn,
     )
 
-    // 动画：每 250ms 切换测试中的疑似动画
-    val animHandler = android.os.Handler(android.os.Looper.getMainLooper())
-    val animRunnable = object : Runnable {
-      var dots = 0
-      override fun run() {
-        if (completed.get()) return
-        dots = (dots + 1) % 4
-        val dotStr = ".".repeat(dots)
-        for (i in labels.indices) {
-          val cur = labels[i].text.toString()
-          if (cur == I18n.t(this@MainActivity, "测速中…", "testing…")
-              || cur.endsWith("..") || cur.endsWith("...") || cur.endsWith(".")) {
-            labels[i].text = I18n.t(this@MainActivity, "测速中", "testing") + dotStr
+    var runTest: (() -> Unit)? = null
+    runTest = {
+      // 重置 UI
+      for (j in radios.indices) radios[j].isChecked = false
+      for (l in latencies) l.text = I18n.t(this@MainActivity, "测速中…", "testing…")
+      statusProgress.visibility = android.view.View.VISIBLE
+      statusText.text = I18n.t(this@MainActivity, "正在并发检测 N 个源…", "Testing N sources concurrently…")
+        .replace("N", sources.size.toString())
+      confirmBtn.text = I18n.t(this@MainActivity, "正在测速…", "Testing…")
+      confirmBtn.isEnabled = false
+      retryAction = null
+
+      Thread {
+        val fastest = um.speedTestAll { m, ms ->
+          val idx = sources.indexOfFirst { it.id == m.id }
+          val text = if (ms != null) "$ms ms" else I18n.t(this, "不可用", "unavailable")
+          runOnUiThread {
+            if (idx in latencies.indices) latencies[idx].text = text
           }
         }
-        animHandler.postDelayed(this, 250)
-      }
-    }
-    animHandler.postDelayed(animRunnable, 250)
-
-    // 并发测速（阻塞直到所有源完成或超时）
-    Thread {
-      val fastest = um.speedTestAll { m, ms ->
-        val idx = sources.indexOfFirst { it.id == m.id }
-        val text = if (ms != null) ms.toString() + " ms" else I18n.t(this, "不可用", "unavailable")
-        runOnUiThread { if (idx in labels.indices) labels[idx].text = text }
-      }
-      runOnUiThread {
-        if (completed.compareAndSet(false, true)) {
-          animHandler.removeCallbacks(animRunnable)
+        runOnUiThread {
+          if (completed.get()) return@runOnUiThread
           statusProgress.visibility = android.view.View.GONE
-          statusText.text = if (fastest != null)
-            I18n.t(this, "已选择最快源：", "Fastest: ") + fastest.name
-          else
-            I18n.t(this, "所有源均不可用", "All sources unavailable")
-          // 短暂停留让用户看到结果再关闭
-          android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-            dialog.dismiss()
-            onComplete(fastest)
-          }, 600)
+          if (fastest != null) {
+            val idx = sources.indexOfFirst { it.id == fastest.id }
+            for (j in radios.indices) radios[j].isChecked = (j == idx)
+            statusText.text = I18n.t(this, "已选择最快源：", "Fastest: ") + fastest.name
+            confirmBtn.text = I18n.t(this, "开始更新（", "Update (") + fastest.name + "）"
+            retryAction = null
+          } else {
+            failedAttempts++
+            if (failedAttempts > 1) {
+              statusText.text = I18n.t(this, "多次测速均失败：所有更新源不可达，请检查网络后重试", "Speed test failed repeatedly: all update sources unreachable; check your network and retry")
+            } else {
+              statusText.text = I18n.t(this, "所有源均不可用，请重试或检查网络", "All sources unavailable; retry or check network")
+            }
+            confirmBtn.text = I18n.t(this, "重试", "Retry")
+            retryAction = { runTest?.invoke() }
+          }
+          confirmBtn.isEnabled = true
         }
-      }
-    }.start()
+      }.start()
+    }
+    runTest.invoke()
   }
 
   /** 引擎启动失败弹窗：展示详细错误日志报告（引擎日志 + 设备/架构诊断），支持下载与重试。
@@ -1094,7 +1129,9 @@ class MainActivity : ComponentActivity() {
       },
       onProgress = { done, total -> term.appendProgress("更新", "进度", done, total) },
     )
-    while (!updateDone.get()) Thread.sleep(200)
+    val waitDeadline = System.currentTimeMillis() + 180_000
+    while (!updateDone.get() && System.currentTimeMillis() < waitDeadline) Thread.sleep(200)
+    if (!updateDone.get()) updateOk.set(false)
     if (!updateOk.get()) {
       if (archMismatch) {
         term.appendLine("在线更新失败（架构不匹配，必须修复）")
@@ -1129,8 +1166,21 @@ class MainActivity : ComponentActivity() {
     }
   }
 
-  /** 检查更新（合并到主页终端）：后台线程跑在线更新管线，详细日志流式输出到主页终端。 */
+  /** 检查更新（合并到主页终端）：先测速选源，确认后再跑在线更新管线，日志流式输出到主页终端。 */
   private fun runCheckUpdate() {
+    showSpeedTestDialog { fastest ->
+      if (fastest != null) {
+        updateManager.activeMirror = fastest
+        prefs.edit().putString("active_mirror_id", fastest.id).apply()
+        runRuntimeUpdate()
+      } else {
+        terminalScreen.terminal().appendDetail(I18n.t(this@MainActivity, "已取消更新", "Update cancelled"))
+      }
+    }
+  }
+
+  /** 用已选源跑在线更新管线：后台线程等待完成，带 3 分钟超时防永久卡死。 */
+  private fun runRuntimeUpdate() {
     val term = terminalScreen.terminal()
     term.appendDetail("开始检查更新")
     val done = AtomicBoolean(false)
@@ -1144,8 +1194,15 @@ class MainActivity : ComponentActivity() {
       onProgress = { d, t -> term.appendProgress("更新", "进度", d, t) },
     )
     Thread {
-      while (!done.get()) Thread.sleep(200)
-      if (ok.get()) term.appendDetail("更新完成") else term.appendDetail("更新失败")
+      val waitDeadline = System.currentTimeMillis() + 180_000
+      while (!done.get() && System.currentTimeMillis() < waitDeadline) Thread.sleep(200)
+      if (!done.get()) {
+        term.appendDetail("更新超时")
+      } else if (ok.get()) {
+        term.appendDetail("更新完成")
+      } else {
+        term.appendDetail("更新失败")
+      }
       runOnUiThread { homeScreen.refresh() }
     }.start()
   }
