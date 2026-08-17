@@ -39,6 +39,9 @@ class EngineManager(private val context: Context, private val pickToken: String?
   private val dshBin = File(usrDir, "lib/node_modules/@deepseek-ai/dsh/lib/bin.js")
   /** ensurePrivateDshData() 同步锁：防止 MainActivity 引导线程与 EngineService 看门狗线程并发写 DSH_HOME 标记文件。 */
   private val dshDataLock = Any()
+  /** 快照解压互斥锁：防止 runBootstrapPipeline / startEngineFlow / 看门狗多线程并发解压同一 72MB 快照
+   *  （并发解压会互相覆盖文件导致解压失败 + 无限重试，用户实测日志：进度字节累计到 400+MB）。 */
+  private val snapshotLock = Any()
   private var engineProcess: Process? = null
 
   val engineReady: Boolean get() = nodeBin.exists()
@@ -127,30 +130,42 @@ class EngineManager(private val context: Context, private val pickToken: String?
    * 直接重解压会"丢失"这些私有数据，必须先备份后恢复；profiles 出厂配置
    * （cordis*.yml/node_modules）以快照为准（手动 patch 需在新版基础上重打）。
    * 任何失败：恢复备份数据，保留旧运行时（下次启动重试）。
+   *
+   * 并发安全（BUG 修复）：整个方法由 snapshotLock 保护——MainActivity 的
+   * runBootstrapPipeline（首次安装）与 startEngineFlow（onResume 自动拉起）
+   * 可能同时进入，并发解压同一目录会互相破坏文件（实测日志：两个线程交替
+   * 输出解压进度、字节累计超过快照大小、反复失败）。加锁后第二个调用方
+   * 会等待第一个完成；若第一个已成功解压，幂等检查直接返回 true 不再重复解压。
    */
   fun refreshSnapshot(onProgress: (Long, Long) -> Unit): Boolean {
-    val backup = File(context.filesDir, ".dsh-backup")
-    val dsh = File(homeDir, ".dsh")
-    try {
-      if (dsh.exists()) {
-        backup.deleteRecursively()
-        dsh.copyRecursively(backup)
-      }
-      val ok = extractSnapshot(onProgress)
-      if (!ok) {
+    synchronized(snapshotLock) {
+      // 幂等：并发场景下等待锁期间另一线程可能已完成解压，直接复用结果。
+      if (snapshotFresh()) return true
+      val backup = File(context.filesDir, ".dsh-backup")
+      val dsh = File(homeDir, ".dsh")
+      try {
+        if (dsh.exists()) {
+          backup.deleteRecursively()
+          dsh.copyRecursively(backup)
+        }
+        val ok = extractSnapshot(onProgress)
+        if (!ok) {
+          restoreUserData(backup, dsh)
+          Log.e(TAG, "snapshot refresh: extract failed, kept old runtime")
+          lastSnapshotFailAt = System.currentTimeMillis()
+          return false
+        }
         restoreUserData(backup, dsh)
-        Log.e(TAG, "snapshot refresh: extract failed, kept old runtime")
+        backup.deleteRecursively()
+        fingerprintFile().writeText(bundledFingerprint())
+        Log.i(TAG, "snapshot refreshed (fingerprint " + bundledFingerprint().take(12) + ")")
+        return true
+      } catch (t: Throwable) {
+        restoreUserData(backup, dsh)
+        Log.e(TAG, "snapshot refresh failed; kept old runtime", t)
+        lastSnapshotFailAt = System.currentTimeMillis()
         return false
       }
-      restoreUserData(backup, dsh)
-      backup.deleteRecursively()
-      fingerprintFile().writeText(bundledFingerprint())
-      Log.i(TAG, "snapshot refreshed (fingerprint " + bundledFingerprint().take(12) + ")")
-      return true
-    } catch (t: Throwable) {
-      restoreUserData(backup, dsh)
-      Log.e(TAG, "snapshot refresh failed; kept old runtime", t)
-      return false
     }
   }
 
@@ -179,16 +194,20 @@ class EngineManager(private val context: Context, private val pickToken: String?
    * callers own the progress UI.
    * @param onProgress bytesDone, bytesTotal.
    * @returns true on success.
+   * 并发安全：与 refreshSnapshot 共用 snapshotLock，防止多线程同时解压。
    */
   fun extractSnapshot(onProgress: (Long, Long) -> Unit): Boolean {
-    return try {
-      val fd = context.assets.openFd("snapshot.tar.xz")
-      SnapshotExtractor.extract(context.assets.open("snapshot.tar.xz"), fd.length, context.filesDir, onProgress)
-      homeDir.mkdirs()
-      true
-    } catch (t: Throwable) {
-      Log.e(TAG, "snapshot extract failed", t)
-      false
+    synchronized(snapshotLock) {
+      return try {
+        val fd = context.assets.openFd("snapshot.tar.xz")
+        SnapshotExtractor.extract(context.assets.open("snapshot.tar.xz"), fd.length, context.filesDir, onProgress)
+        homeDir.mkdirs()
+        true
+      } catch (t: Throwable) {
+        Log.e(TAG, "snapshot extract failed", t)
+        lastSnapshotFailAt = System.currentTimeMillis()
+        false
+      }
     }
   }
 
@@ -583,5 +602,12 @@ class EngineManager(private val context: Context, private val pickToken: String?
 
     /** 引擎最近一次真实启动时刻（epoch ms）；主页状态卡运行时长用。 */
     @Volatile var lastStartedAt: Long = 0
+
+    /** 上次快照解压/刷新失败时刻（epoch ms）。MainActivity 据此冷却自动重试，
+     *  防止解压失败后 onResume 立即再次触发 → 无限重试循环。 */
+    @Volatile var lastSnapshotFailAt: Long = 0
+
+    /** 快照解压失败后的自动重试冷却窗口（毫秒）。 */
+    const val SNAPSHOT_RETRY_COOLDOWN_MS = 30_000L
   }
 }

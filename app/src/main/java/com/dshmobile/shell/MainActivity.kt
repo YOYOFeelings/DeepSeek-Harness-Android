@@ -1193,6 +1193,14 @@ class MainActivity : ComponentActivity() {
   /** Engine-first flow: 复用已在跑的引擎，否则解压快照/修复架构并启动内嵌引擎，轮询就绪。 */
   private fun startEngineFlow() {
     if (!engineFlowRunning.compareAndSet(false, true)) return
+    // 失败冷却：快照解压刚失败过（如磁盘满/解压异常），30 秒内不自动重试，
+    // 避免 onResume/看门狗反复触发 refreshSnapshot 造成"解压失败→立即重试"死循环。
+    // 用户手动「重启引擎」不受此限制（restartEngine 不走本方法）。
+    if (System.currentTimeMillis() - EngineManager.lastSnapshotFailAt < EngineManager.SNAPSHOT_RETRY_COOLDOWN_MS) {
+      terminalScreen.terminal().appendLine("运行时更新刚失败，请稍候 30 秒或手动点击「重启引擎」重试")
+      engineFlowRunning.set(false)
+      return
+    }
     Thread {
       try {
         if (EngineProbe.check().optBoolean("running", false)) return@Thread
