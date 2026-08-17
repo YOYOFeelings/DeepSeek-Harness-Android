@@ -10,7 +10,7 @@
 DeepSeek Harness Android 是一个运行在 Android 上的 DeepSeek 工具集（RAG 智能体 + Web 面板），
 基于 WebView + 本地 Node 运行时，支持快照解压、一键启动/停止引擎、镜像更新、APK 自更新、插件管理等能力。
 
-- 开源地址：https://github.com/YOYOFeelings/DeepSeek-Harness-Android
+- 开源地址：https://github.com/kcln243107/DeepSeek-Harness-Android
 - 采用 Flat Minimalist 扁平设计，纯原生 View 实现，轻量流畅。
 - 支持中英文切换。
 
@@ -20,7 +20,7 @@ DeepSeek Harness Android is a DeepSeek toolkit (RAG agent + Web panel) running o
 built on WebView + local Node runtime. It supports snapshot extraction, one-tap engine start/stop,
 mirror updates, APK self-update, and plugin management.
 
-- Open source: https://github.com/YOYOFeelings/DeepSeek-Harness-Android
+- Open source: https://github.com/kcln243107/DeepSeek-Harness-Android
 - Flat Minimalist design, pure native Views, lightweight and smooth.
 - Supports Chinese / English switching.
 
