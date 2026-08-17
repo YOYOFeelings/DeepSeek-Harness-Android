@@ -36,14 +36,23 @@ https://github.com/kcln243107/DeepSeek-Harness-Android/actions/workflows/build.y
 ```
 
 点击 **"Run workflow"** → 可选填入：
-- `snapshot_url`: 快照下载地址（必填，x86_64 架构）
-- `version_override`: 强制指定版本（如 `0.12.0`，留空则自动递增）
+- `snapshot_url`: 快照下载地址（留空则从 v1.0 release 按架构自动下载）
+- `version_override`: 强制指定版本（如 `1.0`，留空则自动递增）
 - `version_code_override`: 强制指定 versionCode（如 `50`，仅配合 version_override 使用）
+- `apk_arch`: 构建架构（`all` / `arm64` / `x86_64`，默认 `all`）
 
 ### 构建产物
 
-- Release tag: `v{versionName}`（如 `v0.11.7`）
-- APK 附件: `deepseek-harness-{versionName}-release.apk`
+| 触发方式 | 构建结果 |
+|---------|---------|
+| push 到 main | 双架构：arm64 + x86_64 |
+| workflow_dispatch (apk_arch=all) | 双架构：arm64 + x86_64 |
+| workflow_dispatch (apk_arch=arm64) | 单架构：arm64 |
+| workflow_dispatch (apk_arch=x86_64) | 单架构：x86_64 |
+
+- Release tag: `v{versionName}`（如 `v1.0`）
+- APK 附件: `deepseek-harness-{version}-arm64-release.apk`
+- APK 附件: `deepseek-harness-{version}-x86_64-release.apk`
 - 工作流日志: Actions 标签页
 
 ## 本地构建（需要额外安装）
