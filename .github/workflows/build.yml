@@ -18,7 +18,7 @@ on:
         required: false
         default: ''
       apk_arch:
-        description: '构建架构（release 触发时可选：arm64 / x86_64 / all）'
+        description: '构建架构（workflow_dispatch 时可选：arm64 / x86_64 / all）'
         required: false
         default: 'all'
         type: choice
@@ -36,7 +36,7 @@ env:
   DISTRIBUTION: 'temurin'
 
 jobs:
-  # ── 阶段 1：计算版本号（在所有构建前执行一次）────────────────────────────
+  # ── 阶段 1：计算版本号 + 确定矩阵配置 ─────────────────────────────────────
   version:
     name: Compute version
     runs-on: ubuntu-latest
@@ -54,11 +54,17 @@ jobs:
 
           if [[ -n "${{ inputs.version_override }}" ]]; then
             VERSION_NAME="${{ inputs.version_override }}"
-            VERSION_CODE="${{ inputs.version_code_override:-$(grep -oE 'versionCode\s*=\s*[0-9]+' $PKG | grep -oE '[0-9]+') }}"
+            # 手动指定 versionCode，否则取 gradle 当前值 +1
+            if [[ -n "${{ inputs.version_code_override }}" ]]; then
+              VERSION_CODE="${{ inputs.version_code_override }}"
+            else
+              CURRENT_CODE=$(grep -oE 'versionCode\s*=\s*[0-9]+' "$PKG" | grep -oE '[0-9]+')
+              VERSION_CODE=$(( CURRENT_CODE + 1 ))
+            fi
             echo "手动覆盖版本: $VERSION_NAME (code=$VERSION_CODE)"
           else
-            BASE_VERSION=$(grep -oE 'versionName\s*=\s*"[^"]+"' $PKG | grep -oE '"[^"]+"' | tr -d '"')
-            BASE_CODE=$(grep -oE 'versionCode\s*=\s*[0-9]+' $PKG | grep -oE '[0-9]+')
+            BASE_VERSION=$(grep -oE 'versionName\s*=\s*"[^"]+"' "$PKG" | grep -oE '"[^"]+"' | tr -d '"')
+            BASE_CODE=$(grep -oE 'versionCode\s*=\s*[0-9]+' "$PKG" | grep -oE '[0-9]+')
             RECENT_TAG=$(git tag --sort=-version:refname \
               | grep -E "^v${BASE_VERSION/./\\.}" \
               | head -1 \
@@ -78,7 +84,7 @@ jobs:
           sed -i \
             -e "s/versionCode\s*=\s*[0-9]\+/versionCode = ${VERSION_CODE}/" \
             -e "s/versionName\s*=\s*\"[^\"]*\"/versionName = \"${VERSION_NAME}\"/" \
-            $PKG
+            "$PKG"
           echo "version_name=${VERSION_NAME}" >> $GITHUB_OUTPUT
           echo "version_code=${VERSION_CODE}" >> $GITHUB_OUTPUT
           echo "tag=v${VERSION_NAME}" >> $GITHUB_OUTPUT
@@ -105,15 +111,42 @@ jobs:
       version_code: ${{ steps.version.outputs.version_code }}
       tag: ${{ steps.version.outputs.tag }}
 
-  # ── 阶段 2：按架构构建 APK ────────────────────────────────────────────────
+  # ── 阶段 2：确定矩阵（在 build 之前计算）────────────────────────────────────
+  matrix-setup:
+    name: Setup matrix
+    needs: [version]
+    runs-on: ubuntu-latest
+    outputs:
+      archs: ${{ steps.set-matrix.outputs.archs }}
+    steps:
+      - name: Set matrix architectures
+        id: set-matrix
+        run: |
+          APK_ARCH="${{ inputs.apk_arch }}"
+          EVENT_NAME="${{ github.event_name }}"
+          if [[ "$EVENT_NAME" == "push" ]] || [[ "$APK_ARCH" == "all" ]]; then
+            echo "archs=[\"arm64\",\"x86_64\"]" >> $GITHUB_OUTPUT
+            echo "构建双架构（arm64 + x86_64）"
+          elif [[ "$APK_ARCH" == "arm64" ]]; then
+            echo "archs=[\"arm64\"]" >> $GITHUB_OUTPUT
+            echo "构建单架构：arm64"
+          elif [[ "$APK_ARCH" == "x86_64" ]]; then
+            echo "archs=[\"x86_64\"]" >> $GITHUB_OUTPUT
+            echo "构建单架构：x86_64"
+          else
+            echo "archs=[\"x86_64\"]" >> $GITHUB_OUTPUT
+            echo "默认构建单架构：x86_64"
+          fi
+
+  # ── 阶段 3：按架构构建 APK ────────────────────────────────────────────────
   build:
     name: Build APK (${{ matrix.arch }})
-    needs: [version]
+    needs: [version, matrix-setup]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        arch: ${{ (inputs.apk_arch == 'all' || github.event_name == 'push') && fromJSON('["arm64","x86_64"]') || fromJSON('["' inputs.apk_arch '"]') }}
+        arch: ${{ fromJson(needs.matrix-setup.outputs.archs) }}
 
     steps:
       - name: Checkout
@@ -183,7 +216,7 @@ jobs:
             \`\`\`
           draft: false
           prerelease: false
-          # 同一个 release tag 多次上传不会冲突
+          # 同一 tag 多次上传不会冲突，会追加到已有 Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
