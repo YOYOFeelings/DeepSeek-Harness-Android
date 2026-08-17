@@ -485,9 +485,15 @@ class UpdateManager(private val context: Context) {
     const val DEFAULT_MANIFEST_URL =
       "https://github.com/YOYOFeelings/DeepSeek-Harness-Android/releases/latest/download/MANIFEST.txt"
 
-    /** 备用清单地址：latest 发布未附带 MANIFEST.txt 时回退到带清单的历史发布。 */
+    /**
+     * 备用清单地址：latest 发布未附带 MANIFEST.txt 时回退到带清单的历史发布。
+     * 使用上游 kelai141/dsh-mobile-apk v0.10.8：该发布 MANIFEST.txt 同时含
+     * snapshot-arm64.tar.xz 与 snapshot-x86_64.tar.xz（双 ABI 全量），且 dsh
+     * (0.1.0-rc.6) / node (v24.18.0) 版本与本 fork 内嵌快照完全一致 ——
+     * 修复 arm64 设备「发布清单中无 arm64 架构快照」（v0.10.8-yoyo 仅有 x86_64）。
+     */
     const val DEFAULT_MANIFEST_FALLBACK_URL =
-      "https://github.com/YOYOFeelings/DeepSeek-Harness-Android/releases/download/v0.10.8-yoyo/MANIFEST.txt"
+      "https://github.com/kelai141/dsh-mobile-apk/releases/download/v0.10.8/MANIFEST.txt"
 
     /** 默认激活更新源 id（持久化配置缺省时使用 akaere）。 */
     const val DEFAULT_MIRROR_ID = "akaere"
