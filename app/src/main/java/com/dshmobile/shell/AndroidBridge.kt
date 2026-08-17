@@ -89,11 +89,14 @@ class AndroidBridge(
       .getString(key, "") ?: ""
   }
 
-  /** 键名校验：非空、长度 ≤ 128、仅允许 [A-Za-z0-9._-]，不含 `..` 或 `/`。 */
+  /** 键名校验：非空、长度 ≤ 128、仅允许 [A-Za-z0-9._-]，不含 `..` 或 `/`。
+   *  BUG-12 修复：拦截以 `__dshc__` 开头的键，防止与 storageShimScript 内部元数据键
+   *    （`__dshc__m:`、`__dshc__p:`）冲突导致数据错乱。 */
   private fun isSafeConfigKey(key: String): Boolean {
     if (key.isEmpty() || key.length > 128) return false
     if (!Regex("^[A-Za-z0-9._-]+$").matches(key)) return false
     if (key.contains("..") || key.contains('/')) return false
+    if (key.startsWith("__dshc__")) return false
     return true
   }
 

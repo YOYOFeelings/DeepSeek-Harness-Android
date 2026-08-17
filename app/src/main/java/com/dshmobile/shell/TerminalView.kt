@@ -52,6 +52,11 @@ class TerminalView(context: Context, private val logFile: File? = null) : Scroll
   /** 日志文件写入锁：进度更新可能来自多个线程/协程，appendText 本身不是原子的。 */
   private val logLock = Any()
 
+
+  companion object {
+    /** 终端文本最大保留行数；超出后从头部截断，防止长时间运行后 OOM。*/
+    const val MAX_LINES = 2000
+  }
   /** 独立详细日志文件（appendDetail 专用），与 [fileLog] 同目录。 */
   private val detailLogFile: File =
     File(fileLog.parentFile, fileLog.nameWithoutExtension + "-detail.log")
@@ -98,6 +103,8 @@ class TerminalView(context: Context, private val logFile: File? = null) : Scroll
       // 追加后必须重新滚到底部，否则新行会被顶出可视区，用户看不到最新输出。
       fullScroll(View.FOCUS_DOWN)
       mirrorToLog(text)
+      // BUG-5 修复：截断超出最大行数的历史内容，防止 TextView 内存无限增长。
+      trimToMaxLines()
     }
   }
 
@@ -144,8 +151,18 @@ class TerminalView(context: Context, private val logFile: File? = null) : Scroll
         lastLive = false
         fullScroll(View.FOCUS_DOWN)
         mirrorToLog(line)
+        trimToMaxLines()
       }
     }
+  }
+
+  /** BUG-5 修复：截断终端文本到 MAX_LINES 行，保留末尾最新内容。 */
+  private fun trimToMaxLines() {
+    val text = textView.text.toString()
+    val lines = text.lineSequence().toList()
+    if (lines.size <= MAX_LINES) return
+    val trimmed = lines.takeLast(MAX_LINES).joinToString("\n") + "\n"
+    textView.setText(trimmed)
   }
 
   /** 清空终端内容和日志文件，并重置进度行跟踪状态。 */

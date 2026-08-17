@@ -2,6 +2,9 @@
 <paths>
   <!-- APK 下载（DownloadManager 写入外部缓存目录） -->
   <external-cache-path name="apk_cache" path="." />
+  <!-- BUG-18 修复：补充 cache-path，防止 findDownloadedApk() fallback 到 cacheDir
+       时 FileProvider 找不到对应 URI 而抛 FileNotFoundException。 -->
+  <cache-path name="apk_cache_internal" path="." />
   <!-- 日志/报告分享：filesDir/logs/ -->
   <files-path name="logs" path="logs/" />
   <!-- 调试导出 zip：公共 Documents/dshdata/ -->

@@ -650,20 +650,30 @@ class MainActivity : ComponentActivity() {
     }
   }
 
-  /** 入口：先执行 APK 版本检查，再进入正常启动流程。 */
+  /** 入口：先执行 APK 版本检查，再进入正常启动流程。
+   *  BUG-6 修复：增加 10 秒超时保护；网络卡住时不再让应用永远停在启动页。 */
   private fun startWithApkCheck() {
     lifecycleScope.launch {
-      apkUpdateManager.checkUpdate(
-        onResult = { info ->
-          lastUpdateInfo = info
-          if (info.hasNew) {
-            presentApkUpdate(info)
-          } else {
-            startFlowOnce()
-          }
-        },
-        onError = { _ -> startFlowOnce() },
-      )
+      var done = false
+      try {
+        withTimeoutOrNull(10_000) {
+          apkUpdateManager.checkUpdate(
+            onResult = { info ->
+              lastUpdateInfo = info
+              if (info.hasNew) {
+                presentApkUpdate(info)
+              } else {
+                startFlowOnce()
+              }
+              done = true
+            },
+            onError = { _ -> startFlowOnce(); done = true },
+          )
+        }
+      } catch (_: kotlin.coroutines.cancellation.CancellationException) {
+        // withTimeoutOrNull 正常超时取消，不影响后续流程
+      }
+      if (!done && flowStarted.compareAndSet(false, true)) startFlowOnce()
     }
   }
 
@@ -1238,14 +1248,13 @@ class MainActivity : ComponentActivity() {
     }.start()
   }
 
-  /** 工作目录选择：未授 All Files Access 先引导，否则直接 SAF 选择。 */
+  /** 工作目录选择：始终走 SAF 路径（不需要 MANAGE_EXTERNAL_STORAGE 权限）。
+   *  BUG-2 修复：原代码在未取得 All Files Access 时直接 return，SAF 选择器永不触发。
+   *  现改为直接调用 directoryPicker.launch()；SAF 返回的 tree URI 对公共存储同样有效，
+   *  引擎通过 dsh 的 SAF 桥协议可直接访问选定目录。 */
   private fun pickDirectory() {
     if (Build.VERSION.SDK_INT < 30) {
       terminalScreen.terminal().appendLine("Android 10 及以下不支持选择外部目录")
-      return
-    }
-    if (!android.os.Environment.isExternalStorageManager()) {
-      showAllFilesAccessExplainDialog()
       return
     }
     directoryPicker.launch(null)
@@ -1390,6 +1399,10 @@ class MainActivity : ComponentActivity() {
         setRequestProperty("Accept", "text/html, */*;q=0.8")
       }
       if (conn.responseCode != 200) return null
+      // BUG-4 修复：仅对 text/html 响应注入 localStorage 代理脚本，
+      //   跳过 JSON API / CSS / JS 等响应，防止脚本被前置破坏数据结构。
+      val contentType = conn.getHeaderField("Content-Type")?.lowercase()?.orEmpty()
+      if (!contentType.contains("text/html")) return null
       val html = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
       if (html.isEmpty() || html.length > 4_000_000) return null
       val injected = if (html.contains("</head>", ignoreCase = true))
@@ -1630,16 +1643,17 @@ class MainActivity : ComponentActivity() {
       settings.builtInZoomControls = true
       settings.displayZoomControls = false
       webViewClient = object : android.webkit.WebViewClient() {
-        // 拦截主页 index HTML，注入 localStorage→宿主文件代理（见 injectIndexShim）。
+        // 拦截所有来自本地引擎（127.0.0.1 / localhost）的响应，注入 localStorage 宿主化代理。
+        // BUG-1 修复：原代码仅在根路径（/、/index.html）注入，子页面（插件管理、设置页等）
+        //   localStorage 写入静默失败；现改为对所有本地请求统一注入。
+        // BUG-4 修复：injectIndexShim 内已增加 Content-Type 前置校验，
+        //   仅对 text/html 响应注入脚本，避免 JSON API / CSS / JS 等响应被污染。
         override fun shouldInterceptRequest(
           view: android.webkit.WebView,
           request: android.webkit.WebResourceRequest,
         ): android.webkit.WebResourceResponse? {
-          val url = request.url
-          val isIndex = request.isForMainFrame &&
-            (url.host == "127.0.0.1" || url.host == "localhost") &&
-            (url.path.isNullOrEmpty() || url.path == "/" || url.path == "/index.html")
-          return if (isIndex) injectIndexShim(url) else null
+          val isLocal = (request.url.host == "127.0.0.1" || request.url.host == "localhost")
+          return if (isLocal) injectIndexShim(request.url) else null
         }
 
         override fun onPageStarted(view: android.webkit.WebView, url: String?, favicon: android.graphics.Bitmap?) {
