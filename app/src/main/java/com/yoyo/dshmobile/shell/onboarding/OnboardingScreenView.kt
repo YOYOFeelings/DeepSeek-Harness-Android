@@ -11,6 +11,7 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.content.res.ColorStateList
 import android.net.Uri
+import android.app.NotificationManager
 import android.os.Build
 import android.provider.Settings
 import android.text.SpannableString
@@ -185,8 +186,7 @@ class OnboardingScreenView(
     } else {
       context.checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
     }
-    val notif =
-      context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+    val notif = isNotificationEnabled(context)
     viewModel.updatePermissionStates(storage, notif)
     updatePermButton()
   }
@@ -1157,4 +1157,28 @@ class OnboardingScreenView(
       canvas.drawCircle(cx, cy + s * 0.14f, s * 0.06f, paint)
     }
   }
+}
+
+/**
+ * 兼容性通知权限检测（覆盖鸿蒙 / 国产 ROM 系统通知开关与运行时权限标记不同步的问题）。
+ *
+ * 背景：部分华为 HarmonyOS / 国产 ROM 上，用户在系统「通知管理」里已开启通知，
+ * 但 App 的 [Manifest.permission.POST_NOTIFICATIONS] 运行时权限标记仍返回未授权，
+ * 导致引导页 P3 无法通过、用户卡死在权限页进不了主界面。
+ *
+ * 策略：
+ * 1. Android 13+ 优先看运行时权限标记（标准路径）；
+ * 2. 权限标记未授权时，回退查询系统通知管理器状态 [NotificationManager.areNotificationsEnabled]——
+ *    鸿蒙上该接口反映用户在系统设置里的真实通知开关，可正确判定「已开通知”。
+ * 3. Android 12 及以下无需运行时通知权限，直接视为已授权。
+ */
+fun isNotificationEnabled(context: Context): Boolean {
+  if (Build.VERSION.SDK_INT < 33) return true
+  val grantedByPermission =
+    context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+  if (grantedByPermission) return true
+  return runCatching {
+    val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+    nm?.areNotificationsEnabled() ?: false
+  }.getOrDefault(false)
 }
