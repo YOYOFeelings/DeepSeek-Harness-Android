@@ -1,9 +1,12 @@
 package com.yoyo.dshmobile.shell.onboarding
 
 import android.Manifest
+import android.app.NotificationManager
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -172,9 +175,7 @@ fun OnboardingScreen(onFinish: () -> Unit) {
     val storage =
       context.checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) ==
         PackageManager.PERMISSION_GRANTED
-    val notif =
-      context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) ==
-        PackageManager.PERMISSION_GRANTED
+    val notif = isNotificationEnabled(context)
     viewModel.updatePermissionStates(storage, notif)
   }
 
@@ -841,4 +842,21 @@ private fun Page4(
       modifier = Modifier.fillMaxWidth(),
     )
   }
+}
+/**
+ * 兼容性通知权限检测（覆盖鸿蒙 / 国产 ROM 系统通知开关与运行时权限标记不同步的问题）。
+ *
+ * 背景：部分华为 HarmonyOS / 国产 ROM 上，用户在系统「通知管理」里已开启通知，
+ * 但 App 的 POST_NOTIFICATIONS 运行时权限标记仍返回未授权，导致引导页 P3 无法通过。
+ * 策略：Android 13+ 优先看运行时权限标记；未授权时回退查询系统通知管理器状态。
+ */
+private fun isNotificationEnabled(context: Context): Boolean {
+  if (Build.VERSION.SDK_INT < 33) return true
+  val grantedByPermission =
+    context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+  if (grantedByPermission) return true
+  return runCatching {
+    val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+    nm?.areNotificationsEnabled() ?: false
+  }.getOrDefault(false)
 }
