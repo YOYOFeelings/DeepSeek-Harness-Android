@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <!-- 主题色（浅色 Flat Minimalist 白色简洁风，dh_* 为单一来源，页面内不得硬编码颜色） -->
+  <color name="dh_primary">#2D5F9E</color>
+  <color name="dh_primary_dark">#1F4673</color>
+  <color name="dh_on_primary">#FFFFFF</color>
+  <color name="dh_background">#F4F5F7</color>
+  <color name="dh_surface">#FFFFFF</color>
+  <color name="dh_text_primary">#1A1A1A</color>
+  <color name="dh_text_secondary">#5F6368</color>
+  <color name="dh_text_faint">#9AA0A6</color>
+  <color name="dh_divider">#E0E0E0</color>
+  <color name="dh_danger">#D93025</color>
+  <color name="dh_success">#188038</color>
+  <color name="dh_warning">#F9AB00</color>
+  <color name="dh_link">#1A73E8</color>
+
+  <!-- 终端黑色输出区（浅色等宽文字） -->
+  <color name="dh_terminal_bg">#0E0E10</color>
+  <color name="dh_terminal_text">#DCDEE2</color>
+  <color name="dh_ic_launcher_background">#2D5F9E</color>
+
+  <!-- 引导页背景渐变阶（浅灰蓝，自上而下浅→略深） -->
+  <color name="dh_bg_gradient_start">#EDF3FA</color>
+  <color name="dh_bg_gradient_end">#DFEAF6</color>
+  <!-- 极淡科技网格线 -->
+  <color name="dh_grid_line">#142D5F9E</color>
+  <!-- 主按钮蓝渐变 -->
+  <color name="dh_btn_gradient_start">#3A74B5</color>
+  <color name="dh_btn_gradient_end">#1F4673</color>
+  <!-- 图标玻璃底渐变（更亮→深蓝） -->
+  <color name="dh_icon_gradient_start">#4E9BE3</color>
+  <color name="dh_icon_gradient_end">#1F5E9E</color>
+  <!-- 分页胶囊灰态 -->
+  <color name="dh_capsule_idle">#C7CDD4</color>
+
+  <!-- 自适应图标背景（mipmap-anydpi-v26/ic_launcher.xml 引用，勿删） -->
+  <color name="ic_launcher_background">#2D5F9E</color>
+</resources>

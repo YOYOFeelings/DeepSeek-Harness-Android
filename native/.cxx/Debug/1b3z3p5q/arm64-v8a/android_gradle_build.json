@@ -1,0 +1,38 @@
+{
+  "buildFiles": [
+    "/workspace/dsh-mobile-apk-yoyo/native/src/main/cpp/CMakeLists.txt"
+  ],
+  "cleanCommandsComponents": [
+    [
+      "/workspace/android-sdk/cmake/3.22.1/bin/ninja",
+      "-C",
+      "/workspace/dsh-mobile-apk-yoyo/native/.cxx/Debug/1b3z3p5q/arm64-v8a",
+      "clean"
+    ]
+  ],
+  "buildTargetsCommandComponents": [
+    "/workspace/android-sdk/cmake/3.22.1/bin/ninja",
+    "-C",
+    "/workspace/dsh-mobile-apk-yoyo/native/.cxx/Debug/1b3z3p5q/arm64-v8a",
+    "{LIST_OF_TARGETS_TO_BUILD}"
+  ],
+  "libraries": {
+    "nativedata::@6890427a1f51a3e7e1df": {
+      "toolchain": "toolchain",
+      "abi": "arm64-v8a",
+      "artifactName": "nativedata",
+      "output": "/workspace/dsh-mobile-apk-yoyo/native/build/intermediates/cxx/Debug/1b3z3p5q/obj/arm64-v8a/libnativedata.so",
+      "runtimeFiles": []
+    }
+  },
+  "toolchains": {
+    "toolchain": {
+      "cCompilerExecutable": "/workspace/android-sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin/clang.lld",
+      "cppCompilerExecutable": "/workspace/android-sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++.lld"
+    }
+  },
+  "cFileExtensions": [],
+  "cppFileExtensions": [
+    "cpp"
+  ]
+}

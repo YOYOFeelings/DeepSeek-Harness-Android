@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+  xmlns:tools="http://schemas.android.com/tools">
+
+  <!-- Shizuku 运行时权限 -->
+  <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
+  <!-- 网络与系统基础权限 -->
+  <uses-permission android:name="android.permission.INTERNET" />
+  <uses-permission android:name="android.permission.VIBRATE" />
+  <uses-permission android:name="android.permission.WAKE_LOCK" />
+  <!-- 存储权限（分版本） -->
+  <!-- Android 13+ 媒体读取权限 -->
+  <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+  <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+  <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+  <!-- 低版本读取外部存储（API 26-32） -->
+  <uses-permission
+    android:name="android.permission.READ_EXTERNAL_STORAGE"
+    android:maxSdkVersion="32" />
+  <!-- 低版本写入外部存储（API 26-28） -->
+  <uses-permission
+    android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+    android:maxSdkVersion="28" />
+  <!-- Android 13+ 通知权限 -->
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+  <application
+    android:name=".DshApp"
+    android:allowBackup="true"
+    android:icon="@mipmap/ic_launcher"
+    android:label="@string/app_name"
+    android:networkSecurityConfig="@xml/network_security_config"
+    android:supportsRtl="true"
+    android:theme="@style/Theme.Dsh">
+
+    <!-- 引导页（Launcher）：首次启动展示引导页，完成后进入 MainActivity -->
+    <activity
+      android:name=".OnboardingActivity"
+      android:exported="true"
+      android:theme="@style/Theme.Dsh">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+      </intent-filter>
+    </activity>
+
+    <!-- 主页：非 launcher，由引导页进入 -->
+    <activity
+      android:name=".MainActivity"
+      android:exported="false"
+      android:windowSoftInputMode="adjustResize" />
+
+    <!-- 关于页：独立全屏 Activity（折叠视差滚动） -->
+    <activity
+      android:name=".AboutActivity"
+      android:exported="false"
+      android:theme="@style/Theme.Dsh" />
+
+    <!-- 引擎会话页：内嵌 WebView 加载 127.0.0.1:3080 -->
+    <activity
+      android:name=".engine.SessionActivity"
+      android:exported="false"
+      android:theme="@style/Theme.Dsh" />
+
+    <!-- Shizuku：授权进程（authorities 使用 ${applicationId}） -->
+    <provider
+      android:name="rikka.shizuku.ShizukuProvider"
+      android:authorities="${applicationId}"
+      android:enabled="true"
+      android:exported="true"
+      android:multiprocess="false"
+      android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+
+    <!-- 更新安装：经 FileProvider 向系统安装器暴露下载的 APK -->
+    <provider
+      android:name="androidx.core.content.FileProvider"
+      android:authorities="${applicationId}.provider"
+      android:exported="false"
+      android:grantUriPermissions="true">
+      <meta-data
+        android:name="android.support.FILE_PROVIDER_PATHS"
+        android:resource="@xml/file_paths" />
+    </provider>
+  </application>
+
+</manifest>

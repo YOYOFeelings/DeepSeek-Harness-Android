@@ -1,0 +1,55 @@
+# Build outputs
+*.apk
+*.ap_
+*.aab
+*.dex
+*.class
+*.jar
+*.war
+*.ear
+
+# Gradle files
+.gradle/
+build/
+gradle/
+gradlew
+gradlew.bat
+local.properties
+
+# Android files
+*.hprof
+*.so
+*.nupkg
+*.opam
+
+# IDE files
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+.settings/
+.project
+.classpath
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
+
+# Secrets
+SECRETS.md
+keystore.properties
+
+# Log files
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp

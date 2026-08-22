@@ -1,0 +1,27 @@
+{
+  "buildFiles": [
+    "/workspace/dsh-mobile-apk-yoyo/native/src/main/cpp/CMakeLists.txt"
+  ],
+  "cleanCommandsComponents": [
+    [
+      "/workspace/android-sdk/cmake/3.22.1/bin/ninja",
+      "-C",
+      "/workspace/dsh-mobile-apk-yoyo/native/.cxx/Debug/1b3z3p5q/x86_64",
+      "clean"
+    ]
+  ],
+  "buildTargetsCommandComponents": [
+    "/workspace/android-sdk/cmake/3.22.1/bin/ninja",
+    "-C",
+    "/workspace/dsh-mobile-apk-yoyo/native/.cxx/Debug/1b3z3p5q/x86_64",
+    "{LIST_OF_TARGETS_TO_BUILD}"
+  ],
+  "libraries": {
+    "nativedata::@6890427a1f51a3e7e1df": {
+      "artifactName": "nativedata",
+      "abi": "x86_64",
+      "output": "/workspace/dsh-mobile-apk-yoyo/native/build/intermediates/cxx/Debug/1b3z3p5q/obj/x86_64/libnativedata.so",
+      "runtimeFiles": []
+    }
+  }
+}

@@ -1,0 +1,11 @@
+# Checklist
+- [x] node DT_NEEDED 的 8 库名在 usr/lib 下均以真实非空文件存在（快照/libz 场景通过）
+- [x] 符号链接（含 FUSE 读不到）能被实体化为真实文件，`node-deps real=8/8`
+- [x] EngineProcess.start 启动前顺序为：库实体化 → 关键文件校验/自愈 → 残留清理 → spawn
+- [x] 关键文件校验缺失时先自愈（ensureExecutable + resolveTermuxExecPreload），失败有日志不崩溃
+- [x] 启动前 `pkill -f lib/bin.js` 清理残留，防 3080 EADDRINUSE；已运行句柄不复用清理
+- [x] `assembleRelease` 编译通过（无新增错误）
+- [x] APK 签名 SHA-256 前缀 `5696…25ff`（规则 8.8）
+- [x] 路径清单一：本次改动只触及 影响文件清单（RuntimePermissions/EngineProcess/RuntimeUpdater）
+- [x] 原功能自检：主页引擎状态探活(3080)、会话页更新/镜像、停止引擎服务 均不受影响
+- [x] PITFALLS.md 已追加本轮记录

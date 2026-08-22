@@ -1,0 +1,7 @@
+{
+  "name": "引擎状态",
+  "desc": "查看引擎运行状态、端口探活与版本信息的内置插件",
+  "version": "1.0.0",
+  "enabled": true,
+  "source": "bundled"
+}

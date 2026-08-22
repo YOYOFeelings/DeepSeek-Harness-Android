@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- FileProvider 对外暴露路径（更新 APK 走 cacheDir/apk/） -->
+<paths>
+  <cache-path name="apk" path="apk/" />
+  <!-- 关于页发送日志：导出到 cacheDir/logs_export/ 目录下的日志压缩包（根目录必须为目录，否则 FileProvider 抛 StringIndexOutOfBoundsException） -->
+  <cache-path name="logs_export" path="logs_export/" />
+</paths>

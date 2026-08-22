@@ -1,0 +1,278 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="app_name">deepseek HARNESS</string>
+  <string name="nav_home">主页</string>
+  <string name="nav_plugins">插件</string>
+  <string name="nav_settings">设置</string>
+
+  <!-- 引导页文案 -->
+  <string name="onb_next">下一步</string>
+  <string name="onb_agree_continue">同意并继续</string>
+  <string name="onb_view_full_policy">查看全部协议</string>
+  <string name="onb_get_permission">获取权限</string>
+  <string name="onb_request_permission">申请权限</string>
+  <string name="onb_auth_shizuku">授权 Shizuku</string>
+  <string name="onb_check_root">检测 Root</string>
+  <string name="onb_skip">跳过并进入主页</string>
+  <string name="onb_version">deepseek HARNESS v0.13.0-Data</string>
+  <string name="onb_no_permission">无权限</string>
+
+  <!-- 主界面顶部标题栏 -->
+  <string name="home_top_title">主页</string>
+
+  <!-- 主页数据卡片 -->
+  <string name="stat_uptime_title">运行时长</string>
+  <string name="stat_uptime_desc">系统已运行</string>
+  <string name="stat_memory_title">内存占用</string>
+  <string name="stat_memory_desc">系统内存使用</string>
+  <string name="stat_events_title">事件统计</string>
+  <string name="stat_events_desc">已记录行为事件</string>
+  <string name="stat_storage_title">存储占用</string>
+  <string name="stat_storage_desc">内部存储使用</string>
+  <string name="stat_error">--</string>
+
+  <!-- 公告卡片 -->
+  <string name="announce_title">公告</string>
+  <string name="announce_line_1">欢迎使用 deepseek HARNESS。</string>
+  <string name="announce_line_2">连接设备权限后可使用完整指令能力。</string>
+  <string name="announce_time">刚刚</string>
+
+  <!-- 工作区卡片 -->
+  <string name="workspace_title">工作区</string>
+  <string name="workspace_path">/data/data/com.yoyo.dshmobile.shell</string>
+  <string name="switch_dir">切换目录</string>
+
+  <!-- 复制按钮文案（日志页/终端均用） -->
+  <string name="terminal_copy">复制</string>
+  <string name="terminal_copied">已复制</string>
+
+  <!-- 对话页 -->
+  <string name="chat_title">对话</string>
+  <string name="chat_hint">输入内容，回车发送</string>
+  <string name="chat_send">发送</string>
+
+  <!-- 设置页 -->
+  <string name="settings_title">设置</string>
+
+  <!-- 会话页 / 引擎 -->
+  <string name="nav_conversation">会话</string>
+  <string name="conversation_title">会话</string>
+  <string name="engine_ready">已就绪</string>
+  <string name="engine_ready_version">已就绪 v%1$s</string>
+  <string name="engine_no_rootfs">先安装运行时</string>
+  <string name="engine_starting">启动引擎</string>
+  <string name="engine_running">引擎运行中</string>
+  <string name="engine_stopped">引擎未运行</string>
+  <string name="engine_start">启动引擎</string>
+  <string name="engine_stop">停止引擎</string>
+  <string name="engine_open_session">打开会话</string>
+  <string name="engine_check_update">检查并更新引擎</string>
+  <string name="engine_update_none">已是最新</string>
+  <string name="engine_update_fail">检查更新失败</string>
+  <string name="engine_update_downloading">正在下载…</string>
+  <string name="engine_progress">正在下载 %1$s / %2$s</string>
+  <string name="engine_logs_title">引擎日志</string>
+  <string name="engine_logs_empty">暂无日志</string>
+  <string name="engine_logs_refresh">拉取中…</string>
+  <string name="engine_mirror_dialog_title">选择更新源（代理）</string>
+  <string name="engine_mirror_close">关闭</string>
+  <string name="engine_mirror_last">上次使用</string>
+  <string name="engine_mirror_testing">检测中…</string>
+  <string name="engine_mirror_fail">连接失败</string>
+  <string name="engine_update_dialog_title">引擎更新</string>
+  <string name="engine_update_phase_download">正在下载</string>
+  <string name="engine_progress_share">%1$s / %2$s（%3$d%%）</string>
+  <string name="engine_update_done">更新完成</string>
+  <string name="engine_progress_cancel">取消</string>
+  <string name="dh_ok">确定</string>
+  <string name="engine_update_overwrite_title">更新引擎</string>
+  <string name="engine_update_overwrite_msg">将覆盖现有的引擎数据（重新下载并安装），确定继续吗？</string>
+  <string name="engine_start_dialog_title">启动引擎</string>
+  <string name="engine_start_dialog_starting">启动中…</string>
+  <string name="engine_start_dialog_probing">探活中…</string>
+  <string name="engine_start_dialog_running">运行中</string>
+  <string name="engine_start_dialog_failed">启动失败: %1$s</string>
+  <string name="engine_start_dialog_not_ready">运行时未就绪，请先检查并更新引擎</string>
+  <string name="engine_start_dialog_stuck">仍在启动中，请查看日志</string>
+  <string name="engine_start_dialog_retry">重试</string>
+  <string name="engine_start_dialog_go_update">去更新</string>
+  <string name="engine_start_dialog_close">关闭</string>
+  <string name="engine_start_view_log">查看日志</string>
+  <string name="engine_start_hide_log">收起日志</string>
+  <string name="engine_start_failed_inline">引擎未启动：%1$s</string>
+  <string name="engine_start_stuck_inline">引擎仍在启动中，未真正就绪</string>
+  <string name="engine_retry">重试</string>
+  <string name="engine_start_failed_title">启动失败</string>
+  <string name="engine_start_failed_unknown">未知错误，请查看日志</string>
+  <!-- 引擎环境/工具缺失提示 -->
+  <string name="env_missing_title">引擎环境不完整</string>
+  <string name="env_missing_inner">检测到以下引擎工具缺失或不可用，请前往更新引擎以自动补齐：</string>
+  <string name="env_go_update">去更新引擎</string>
+  <string name="engine_no_rootfs_update_required">引擎文件未就绪，请先检查更新</string>
+  <string name="update_history_title">往期版本</string>
+  <string name="update_history_empty">暂无历史版本</string>
+  <string name="update_history_download">下载</string>
+  <string name="update_history_downloading">下载中...</string>
+  <string name="update_history_install">安装</string>
+  <string name="update_refresh">刷新</string>
+  <string name="engine_channel_name">引擎</string>
+  <string name="engine_notify_title">deepseek HARNESS 引擎运行中</string>
+  <string name="session_load_failed">会话加载失败，请确认引擎已启动后点击重试</string>
+  <string name="settings_about">关于</string>
+  <string name="settings_about_desc">应用信息与版本</string>
+  <string name="settings_update">版本更新</string>
+  <string name="settings_update_desc">检查并安装新版本</string>
+  <string name="settings_logs">日志</string>
+  <string name="settings_logs_desc">查看应用运行日志</string>
+  <string name="settings_auto_start">自动启动引擎</string>
+  <string name="settings_auto_start_desc">打开应用时自动启动引擎（默认关闭）</string>
+
+  <!-- 更新 -->
+  <string name="update_checking">正在检查更新…</string>
+  <string name="update_latest">已是最新版本</string>
+  <string name="update_available">发现新版本</string>
+  <string name="update_downloading">正在下载…</string>
+  <string name="update_downloaded">下载完成，准备安装</string>
+  <string name="update_no_file">未提供更新安装包</string>
+  <string name="update_error">更新请求失败</string>
+
+  <!-- 日志页 -->
+  <string name="logs_title">日志</string>
+  <string name="logs_empty">暂无日志文件</string>
+  <string name="logs_open">查看全文</string>
+
+  <!-- 主页「状态」仪表盘卡片 -->
+  <string name="home_status_uptime">运行时间</string>
+  <string name="home_status_uptime_desc">软件运行时间</string>
+  <string name="home_status_memory">内存占用</string>
+  <string name="home_status_memory_desc">软件进程内存</string>
+  <string name="home_status_storage">存储占用</string>
+  <string name="home_status_storage_desc">应用数据占用</string>
+  <string name="home_status_plugins">插件数量</string>
+  <string name="home_status_plugins_desc">接入引擎后统计</string>
+  <string name="home_status_engine">引擎状态</string>
+  <string name="home_status_engine_running">运行中</string>
+  <string name="home_status_engine_stopped">未运行</string>
+  <string name="home_status_engine_checking">检测中…</string>
+
+  <!-- 主页「快捷操作」 -->
+  <string name="home_quick_title">快捷操作</string>
+  <string name="home_quick_restart">重启引擎</string>
+  <string name="home_quick_restart_desc">重新初始化执行引擎</string>
+  <string name="home_quick_latency">检测毫秒</string>
+  <string name="home_quick_latency_desc">测量网络响应时延</string>
+  <string name="engine_restart_sent">已发送引擎重启指令</string>
+  <string name="engine_not_running">引擎未运行</string>
+  <string name="latency_result">响应时延: %1$d ms</string>
+  <string name="latency_failed">测速失败</string>
+  <string name="latency_host">https://www.baidu.com</string>
+
+  <!-- 插件页 -->
+  <string name="plugins_empty">暂无可用插件\n接入 dsh 引擎后将在此展示已安装 / 系统插件</string>
+  <string name="plugin_enabled">启用</string>
+  <string name="plugin_disabled">停用</string>
+
+  <!-- 关于页 -->
+  <string name="about_title">关于</string>
+  <string name="about_version_label">版本: %1$s</string>
+  <string name="about_version_hint">应用版本号</string>
+  <string name="about_build_label">构建: %1$s</string>
+  <string name="about_build_hint">内部构建号</string>
+  <string name="about_github">GitHub 仓库</string>
+  <string name="about_github_desc">查看源码与发行记录</string>
+  <string name="about_desc">deepseek HARNESS 是一款为开发者设计的工具应用，提供终端、插件管理等功能。</string>
+  <string name="about_source">查看源码</string>
+  <string name="about_policy">项目协议</string>
+  <string name="about_policy_desc">用户协议与许可</string>
+  <string name="about_policy_title">项目协议</string>
+  <string name="about_policy_loading">正在加载...</string>
+  <string name="about_policy_failed">协议加载失败，已显示本地内容</string>
+  <string name="about_policy_close">关闭</string>
+  <string name="about_qq">QQ群</string>
+  <string name="about_send_logs">发送日志</string>
+  <string name="about_send_logs_desc">打包日志并分享/保存</string>
+
+  <!-- 关于页：发送日志弹窗 -->
+  <string name="about_logs_dialog_title">发送日志</string>
+  <string name="about_logs_save">保存日志</string>
+  <string name="about_logs_send">发送日志</string>
+  <string name="about_logs_saved">日志已保存到: %1$s</string>
+  <string name="about_logs_save_failed">日志保存失败: %1$s</string>
+  <string name="about_logs_none">暂无日志文件</string>
+  <string name="about_logs_share_fail">无法打开分享: %1$s</string>
+
+  <!-- 关于页：QQ 群弹窗（真实双群号，来源仓库 README ） -->
+  <string name="about_qq_group">DeepSeek Harness 官方交流群</string>
+  <string name="about_qq_group_1">群1</string>
+  <string name="about_qq_group_2">群2</string>
+  <string name="about_qq_group1">200317338</string>
+  <string name="about_qq_group2">932593560</string>
+  <string name="about_qq_group_hint">点击群号复制，打开 QQ 搜索群号加入</string>
+  <string name="about_qq_copy">复制群号</string>
+  <string name="about_qq_copied">群号已复制</string>
+
+  <!-- 更新页 -->
+  <string name="update_current_version">当前版本: %1$s</string>
+  <string name="update_new_version">最新版本: %1$s</string>
+  <string name="update_content_title">更新说明</string>
+
+  <!-- 公告（主页） -->
+  <string name="announce_loading">加载公告中…</string>
+  <string name="announce_fallback">暂无公告信息</string>
+  <string name="announce_source_github">来源: GitHub</string>
+
+  <!-- 设置：权限模式 -->
+  <string name="permission_mode_title">权限模式</string>
+  <string name="permission_mode_desc">当前：%1$s</string>
+  <string name="permission_mode_page_intro">选择使用的权限模式，普通用户仅可执行安全命令，防止越权操作。</string>
+  <string name="permission_mode_hint">选择普通 / 高级 / Shizuku 三档之一</string>
+  <string name="permission_mode_normal_desc">安装即授权，普通应用权限</string>
+  <string name="permission_mode_advanced_desc">手动授予系统级高级权限</string>
+  <string name="permission_mode_shizuku_desc">经 Shizuku 以更高权限执行</string>
+
+  <!-- 主页更新横幅 -->
+  <string name="home_banner_update">发现新版本 · 点击查看</string>
+  <!-- 主页新版本 MD3 更新弹窗 -->
+  <string name="home_update_dialog_title">发现新版本</string>
+  <string name="home_update_dialog_msg">检测到新版本 v%1$s\n是否前往更新页查看并安装？</string>
+  <string name="home_update_dialog_confirm">去更新</string>
+  <string name="home_update_dialog_cancel">取消</string>
+
+  <!-- 首页刷新频率 -->
+  <string name="refresh_title">首页刷新频率</string>
+  <string name="refresh_interval_desc">控制状态卡片数据自动刷新频率</string>
+  <string name="refresh_off">手动刷新</string>
+  <string name="refresh_5s">每 5 秒刷新</string>
+  <string name="refresh_30s">每 30 秒刷新</string>
+  <string name="refresh_60s">每 60 秒刷新</string>
+  <string name="refresh_saved">刷新频率已保存</string>
+
+  <!-- 往期版本：更新日志展开 -->
+  <string name="update_history_log_title">更新日志</string>
+  <string name="update_history_log_empty">该版本暂无更新日志</string>
+  <string name="update_history_count">（%1$d 个版本）</string>
+
+  <!-- 插件页：内置/已安装 -->
+  <string name="plugin_bundled">内置</string>
+  <string name="plugin_installed">已安装</string>
+
+  <!-- 开发者设置：入口 -->
+  <string name="settings_developer">开发者设置</string>
+  <string name="settings_developer_desc">仅供作者自测，需密码进入</string>
+
+  <!-- 开发者设置：密码门 + 协议 -->
+  <string name="dev_password_dialog_title">开发者验证</string>
+  <string name="dev_password_hint">密码请输入作者QQ</string>
+  <string name="dev_agreement">我已了解：开启开发者设置后部分功能可能出现故障，关闭开发者模式即可恢复</string>
+  <string name="dev_password_wrong">密码错误，无法进入</string>
+  <string name="dev_agreement_required">请先勾选协议</string>
+  <string name="dev_password_ok">验证成功，已进入开发者设置</string>
+
+  <!-- 开发者设置页 -->
+  <string name="dev_title">开发者设置</string>
+  <string name="dev_warning_banner">开发者模式已开启：部分功能可能异常，出现故障请关闭开发者模式</string>
+  <string name="dev_update_force">更新直接提示（不检查版本）</string>
+  <string name="dev_update_force_desc">跳过版本比较，任何情况都视为有新版本，用于测试更新链路</string>
+  <string name="dev_danger_hint">说明：开启后更新等流程会跳过必要的检查以便测试，可能造成功能故障；关闭开发者模式即可恢复正常。</string>
+  <string name="dev_switch_off">已开启（点击关闭以恢复正常）</string>
+</resources>

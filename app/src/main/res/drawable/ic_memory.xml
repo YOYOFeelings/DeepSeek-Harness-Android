@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 内存/芯片图标（Material "memory"，主页：内存占用） -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+  android:width="24dp" android:height="24dp"
+  android:viewportWidth="24" android:viewportHeight="24">
+  <path
+    android:fillColor="#FF000000"
+    android:pathData="M15,9L9,9v6h6L15,9zM13,13h-2v-2h2v2zM15,7h2v2h-2zM15,15h2v2h-2zM7,7h2v2L7,9zM7,15h2v2L7,17zM11,5h2v2h-2zM11,17h2v2h-2zM21,11v2h-6v-2h6zM3,11h6v2L3,13zM11,7h2v6h-2z" />
+</vector>

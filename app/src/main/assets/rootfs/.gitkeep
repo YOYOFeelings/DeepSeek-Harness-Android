@@ -1,0 +1,4 @@
+# 占位说明文件
+
+本目录用于放置引擎运行时资产 rootfs.tar.xz（Task 0 本地 arm64 编译产物）。
+骨架阶段未内置真实资产，EngineRootfs.ensureExtracted 会因资产缺失返回 NO_ASSET，优雅降级，不崩溃。

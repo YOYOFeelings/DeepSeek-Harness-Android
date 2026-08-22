@@ -1,0 +1,3 @@
+/workspace/dsh-mobile-apk-yoyo/native/.cxx/Debug/1b3z3p5q/arm64-v8a/CMakeFiles/nativedata.dir
+/workspace/dsh-mobile-apk-yoyo/native/.cxx/Debug/1b3z3p5q/arm64-v8a/CMakeFiles/edit_cache.dir
+/workspace/dsh-mobile-apk-yoyo/native/.cxx/Debug/1b3z3p5q/arm64-v8a/CMakeFiles/rebuild_cache.dir

@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <!-- ===== 原生 View 复用样式（浅色 Flat Minimalist 白色简洁主题） ===== -->
+
+  <!-- 基类：点号命名的样式隐式以「去掉最后一段」为父类，必须补全层级基类兜底 -->
+  <style name="Widget" />
+  <style name="Widget.Dsh" />
+
+  <!-- 主按钮：主色实底、白色文字；圆角 24dp 需叠加 shape drawable（style 无法内联形状） -->
+  <style name="Widget.Dsh.Button.Primary" parent="android:Widget.Material.Button">
+    <item name="android:background">@color/dh_primary</item>
+    <item name="android:textColor">@color/dh_on_primary</item>
+    <item name="android:textSize">16sp</item>
+    <item name="android:textStyle">bold</item>
+    <item name="android:minHeight">52dp</item>
+    <item name="android:paddingStart">24dp</item>
+    <item name="android:paddingEnd">24dp</item>
+    <item name="android:paddingTop">12dp</item>
+    <item name="android:paddingBottom">12dp</item>
+  </style>
+
+  <!-- 描边按钮：透明底、主色描边（描边需叠加 shape drawable）、主色文字 -->
+  <style name="Widget.Dsh.Button.Outline" parent="android:Widget.Material.Button">
+    <item name="android:background">@android:color/transparent</item>
+    <item name="android:textColor">@color/dh_primary</item>
+    <item name="android:textSize">16sp</item>
+    <item name="android:textStyle">bold</item>
+    <item name="android:minHeight">52dp</item>
+    <item name="android:paddingStart">24dp</item>
+    <item name="android:paddingEnd">24dp</item>
+    <item name="android:paddingTop">12dp</item>
+    <item name="android:paddingBottom">12dp</item>
+  </style>
+
+  <!-- 危险按钮：危险色实底（用于拒绝提示等危险操作），圆角同主按钮需叠加 shape -->
+  <style name="Widget.Dsh.Button.Danger" parent="android:Widget.Material.Button">
+    <item name="android:background">@color/dh_danger</item>
+    <item name="android:textColor">@color/dh_on_primary</item>
+    <item name="android:textSize">16sp</item>
+    <item name="android:textStyle">bold</item>
+    <item name="android:minHeight">52dp</item>
+    <item name="android:paddingStart">24dp</item>
+    <item name="android:paddingEnd">24dp</item>
+    <item name="android:paddingTop">12dp</item>
+    <item name="android:paddingBottom">12dp</item>
+  </style>
+
+  <!-- 卡片：白底、圆角 16dp（需叠加 shape drawable）、1dp 阴影 -->
+  <style name="Widget.Dsh.Card">
+    <item name="android:background">@color/dh_surface</item>
+    <item name="android:elevation">1dp</item>
+  </style>
+
+  <!-- 链接文字：链接蓝（下划线需在代码中通过 Spannable 设置，style 无法内联） -->
+  <style name="Widget.Dsh.LinkText" parent="android:TextAppearance.Material.Body1">
+    <item name="android:textColor">@color/dh_link</item>
+    <item name="android:textSize">14sp</item>
+  </style>
+
+  <!-- 标题文字：20sp 粗体 -->
+  <style name="Widget.Dsh.TitleText" parent="android:TextAppearance.Material.Title">
+    <item name="android:textSize">20sp</item>
+    <item name="android:textStyle">bold</item>
+    <item name="android:textColor">@color/dh_text_primary</item>
+  </style>
+
+  <!-- 正文文字：14sp 次要色 -->
+  <style name="Widget.Dsh.BodyText" parent="android:TextAppearance.Material.Body2">
+    <item name="android:textSize">14sp</item>
+    <item name="android:textColor">@color/dh_text_secondary</item>
+  </style>
+</resources>

@@ -1,0 +1,17 @@
+# Checklist
+- [x] probe() 以 TCP connect 127.0.0.1:3080 判定启动，成功即 true；原 HTTP-200 判定移除
+- [x] ensureNodeLibsReal 存在缺失库时 start 抛异常并附清单；EngineService 捕获置 lastStartFailed/lastStartError
+- [x] materializeOne / ensureNodeLibsReal 实体化改为 .tmp→rename 原子替换；复制失败不删除原目标
+- [x] cleanupStaleEngine 不依赖 pkill：回退 /proc cmdline 精确匹配 lib/bin.js 后 kill；无 -f 裸匹配误杀
+- [x] homeDir / TMPDIR mkdirs 返回值校验，失败抛明确异常
+- [x] candidates() 精确名优先，同 base 取最高版本（沙箱回归通过）
+- [x] verifyCriticalFiles 对 termux-exec preload 用 canRead()，消除误导性失败日志
+- [x] stop() 先 destroy 再中断读线程（无 InterruptedIOException 噪音）
+- [x] startWithArgs 回退按主 ABI 动态选 linker64/linker
+- [x] TERMUX_APP__DATA_DIR 后备用 applicationInfo.dataDir
+- [x] start() 顺序为「materializeSymlinks + ensureNodeLibsReal → … → ensureExecutable(spawn 前)」
+- [x] `assembleRelease` 编译通过（无新增错误）
+- [x] APK 签名 SHA-256 前缀 `5696…25ff`（规则 8.8）
+- [x] 路径清单一：本次改动只触及 影响文件清单（EngineProcess / RuntimePermissions）
+- [x] 原功能自检：主页探活、会话页启动弹窗/探活、EngineWatchdog 重启、停止服务 均不受影响
+- [x] PITFALLS.md 已追加本轮记录

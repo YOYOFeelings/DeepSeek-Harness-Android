@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 启动器/引导页图标玻璃蓝渐变底 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <gradient
+        android:angle="135"
+        android:startColor="@color/dh_icon_gradient_start"
+        android:endColor="@color/dh_icon_gradient_end"
+        android:type="linear" />
+</shape>

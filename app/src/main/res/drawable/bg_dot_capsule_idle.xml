@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 非当前页：短胶囊、灰显 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="@color/dh_capsule_idle" />
+    <corners android:radius="5dp" />
+</shape>

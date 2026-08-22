@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 引导页根背景：浅灰蓝渐变 + 极淡科技网格底纹 -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@drawable/bg_onboarding_gradient" />
+    <item>
+        <bitmap
+            android:src="@drawable/grid_tile"
+            android:tileMode="repeat" />
+    </item>
+</layer-list>

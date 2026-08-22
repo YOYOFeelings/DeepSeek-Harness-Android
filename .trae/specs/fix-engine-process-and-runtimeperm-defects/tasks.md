@@ -1,0 +1,36 @@
+# Tasks
+- [x] Task 1: 探活改 TCP（EngineProcess.probe）
+  - [x] SubTask 1.1: `probe()` 用 `Socket("127.0.0.1", 3080)` connect 判定，连接成功即 true；保留 timeoutMs 循环与 500ms 间隔
+  - [x] SubTask 1.2: 删除 HTTP/URL 依赖（确认无其他调用点使用 ENGINE_URL）
+- [x] Task 2: 原子化实体化（RuntimePermissions）
+  - [x] SubTask 2.1: `materializeOne()` 改为「复制到同目录 .tmp→rename 替换」，失败保留原链接不删
+  - [x] SubTask 2.2: `ensureNodeLibsReal()` 复制分支同样改为 .tmp→rename 原子替换
+- [x] Task 3: 库版本精确匹配（RuntimePermissions.ensureNodeLibsReal）
+  - [x] SubTask 3.1: `bestOf(base)` 用正则 `\.so\.\d+` 匹配同类并取版本号最大者（精确名仍最优先）
+  - [x] SubTask 3.2: 沙箱回归：libssl/libicu 等场景不选错版本
+- [x] Task 4: start() 阻断 + 目录校验 + 顺序（EngineProcess/RuntimePermissions）
+  - [x] SubTask 4.1: ensureNodeLibsReal 有 false → 抛 IllegalStateException（附缺失库名）
+  - [x] SubTask 4.2: homeDir.mkdirs / TMPDIR.mkdirs 检查返回值，失败抛明确异常
+  - [x] SubTask 4.3: 顺序改为「materializeSymlinks + ensureNodeLibsReal → … → ensureExecutable(spawn 前)」
+- [x] Task 5: 残留清理不依赖 pkill（EngineProcess）
+  - [x] SubTask 5.1: cleanupStaleEngine 先 pkill，回退扫描 `/proc/<pid>/cmdline` 含 lib/bin.js → kill
+  - [x] SubTask 5.2: 移除 -f 裸匹配防误杀，runCatching 静默
+- [x] Task 6: preload 校验/停止顺序/linker 动态（EngineProcess）
+  - [x] SubTask 6.1: verifyCriticalFiles 对 termux-exec preload 用 canRead()
+  - [x] SubTask 6.2: stop() 先 destroy 再中断读线程
+  - [x] SubTask 6.3: startWithArgs 回退按 `Build.SUPPORTED_64_BIT_ABIS` 选 /system/bin/linker64 或 /system/bin/linker
+- [x] Task 7: dataDir 后备（EngineProcess env）
+  - [x] SubTask 7.1: TERMUX_APP__DATA_DIR 后备改用 context.applicationInfo.dataDir
+- [x] Task 8: 构建与验证
+  - [x] SubTask 8.1: `assembleRelease` 编译通过（无新增错误）
+  - [x] SubTask 8.2: 核对签名 SHA-256 前缀 `5696…25ff`（规则 8.8）
+  - [x] SubTask 8.3: 沙箱回归：实体化原子性 + 版本匹配 逻辑用快照 usr/lib 验证
+- [x] Task 9: 更新文档
+  - [x] SubTask 9.1: PITFALLS.md 追加本轮缺陷修复记录
+  - [x] SubTask 9.2: PROJECT_STRUCTURE.md 同步 EngineProcess/RuntimePermissions 职责描述（无新增文件）
+
+# Task Dependencies
+- [Task 2] depends on [Task 1]（可并行）
+- [Task 4] depends on [Task 2][Task 3]
+- [Task 8] depends on [Task 1..7]
+- [Task 9] depends on [Task 8]

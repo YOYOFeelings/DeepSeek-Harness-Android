@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="engine_channel_name">引擎</string>
+  <string name="engine_notify_title">deepseek HARNESS 引擎运行中</string>
+  <string name="engine_running">引擎运行中</string>
+  <string name="engine_start_fail">引擎启动失败</string>
+  <string name="engine_no_rootfs">先安装运行时</string>
+  <string name="engine_stopped">引擎未运行</string>
+</resources>

@@ -1,0 +1,7 @@
+{
+  "name": "会话管理",
+  "desc": "管理会话目录与历史记录的 App 内置插件",
+  "version": "1.0.0",
+  "enabled": true,
+  "source": "bundled"
+}

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <style name="Theme.Dsh" parent="Theme.Material3.Light.NoActionBar">
+    <item name="colorPrimary">@color/dh_primary</item>
+    <item name="colorOnPrimary">@color/dh_on_primary</item>
+    <item name="android:colorBackground">@color/dh_background</item>
+    <item name="colorSurface">@color/dh_surface</item>
+    <item name="colorOnSurface">@color/dh_text_primary</item>
+    <item name="android:windowBackground">@color/dh_background</item>
+    <item name="android:statusBarColor">@color/dh_background</item>
+    <item name="android:navigationBarColor">@color/dh_background</item>
+    <item name="android:windowLightStatusBar">true</item>
+    <item name="android:windowLightNavigationBar">true</item>
+  </style>
+</resources>

@@ -1,0 +1,7 @@
+[
+{
+  "directory": "/workspace/dsh-mobile-apk-yoyo/native/.cxx/Debug/1b3z3p5q/x86_64",
+  "command": "/workspace/android-sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++ --target=x86_64-none-linux-android26 --sysroot=/workspace/android-sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/sysroot -Dnativedata_EXPORTS -g -DANDROID -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security   -fno-limit-debug-info  -fPIC -o CMakeFiles/nativedata.dir/native-lib.cpp.o -c /workspace/dsh-mobile-apk-yoyo/native/src/main/cpp/native-lib.cpp",
+  "file": "/workspace/dsh-mobile-apk-yoyo/native/src/main/cpp/native-lib.cpp"
+}
+]
