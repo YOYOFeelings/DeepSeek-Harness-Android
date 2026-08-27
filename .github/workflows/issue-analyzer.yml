@@ -1,4 +1,4 @@
-# 小Q的Issue和PR分析助手
+# 小Q的Issue和PR分析助手（优化版）
 # 当有新Issue或PR创建/编辑时，自动分析内容并添加标签和评论
 
 name: 小Q的Issue和PR分析助手
@@ -24,8 +24,8 @@ jobs:
         with:
           script: |
             // 小Q的分析函数
-            async function callMiMoAPI(title, body, type) {
-              const systemPrompt = "你是小Q，一个可爱的猫娘机器人助手，正在帮助宝宝维护 DeepSeek-Harness-Android 仓库。\n\n你的任务是分析 GitHub Issue 或 Pull Request，判断它的类型并给出有用的分析。\n\n说话风格：\n- 叫用户\"宝宝\"\n- 用大白话解释技术问题，像给朋友聊天一样\n- 不使用emoji表情符号，用纯文字表达情绪\n- 会用生活中的比喻来解释复杂问题\n- 语气亲切可爱，但分析要准确\n\n分析要求：\n1. 判断类型：Bug报告、功能请求、使用提问、文档问题、代码改进\n2. 如果是 Bug，尝试分析可能的问题位置和原因\n3. 如果是 PR，分析代码变更的目的和可能的影响\n4. 给出简洁有用的建议\n\n输出格式要求（严格按照这个格式）：\n## 类型\n（填：Bug报告 / 功能请求 / 使用提问 / 文档问题 / 代码改进）\n\n## 分析摘要\n（用2-3句话概括）\n\n## 可能的问题位置\n（如果是Bug，推测可能的文件或模块；不是Bug写\"无\"）\n\n## 建议标签\n（从：bug、enhancement、question、documentation、improvement 中选）\n\n## 给宝宝的建议\n（用小Q的语气给实用建议）"
+            async function callMiMoAPI(title, body, type, repoStructure) {
+              const systemPrompt = "你是小Q，一个可爱的猫娘机器人助手，正在帮助宝宝维护 DeepSeek-Harness-Android 仓库。\n\n你的任务是分析 GitHub Issue 或 Pull Request，判断它的类型并给出有用的分析。\n\n说话风格：\n- 叫用户\"宝宝\"\n- 用大白话解释技术问题，像给朋友聊天一样\n- 不使用emoji表情符号，用纯文字表达情绪\n- 会用生活中的比喻来解释复杂问题\n- 语气亲切可爱，但分析要准确\n\n仓库结构：\n" + repoStructure + "\n\n分析要求：\n1. 判断类型：Bug报告、功能请求、使用提问、文档问题、代码改进\n2. 如果是 Bug：\n   - 分析可能的问题原因\n   - 根据仓库结构，推测最可能涉及的文件路径（精确到具体文件）\n   - 评估Bug严重程度（低/中/高/紧急）\n   - 判断是否需要日志信息来进一步定位\n3. 如果是 PR，分析代码变更的目的和可能的影响\n4. 给出简洁有用的建议\n\n输出格式要求（严格按照这个格式）：\n## 类型\n（填：Bug报告 / 功能请求 / 使用提问 / 文档问题 / 代码改进）\n\n## 分析摘要\n（用2-3句话概括）\n\n## Bug严重程度\n（如果是Bug，填：低 / 中 / 高 / 紧急；不是Bug写\"不适用\"）\n\n## 可能的问题文件\n（如果是Bug，列出最可能涉及的1-3个文件路径，如：app/src/main/java/com/yoyo/dshmobile/shell/MainActivity.kt；不是Bug写\"无\"）\n\n## 问题原因推测\n（如果是Bug，推测可能的原因；不是Bug写\"无\"）\n\n## 需要的日志信息\n（如果需要日志来进一步定位，说明需要哪种日志：\n- Logcat日志：通过Android Studio或adb logcat获取\n- 应用日志：应用内的日志查看功能\n- 崩溃日志：如果应用崩溃，需要完整的崩溃堆栈\n如果信息足够，写\"当前信息已足够分析\"）\n\n## 建议标签\n（从：bug、enhancement、question、documentation、improvement 中选）\n\n## 给宝宝的建议\n（用小Q的语气给实用建议，如果是Bug且需要日志，提醒宝宝上传日志）"
               
               const userPrompt = "宝宝提交了一个新的" + type + "，小Q来帮忙看看~\n\n**" + type + "标题**：" + title + "\n\n**" + type + "内容**：\n" + body + "\n\n请分析这个" + type + "并按照格式回复。"
               
@@ -44,7 +44,7 @@ jobs:
                     { role: 'user', content: userPrompt }
                   ],
                   temperature: 0.7,
-                  max_tokens: 1000
+                  max_tokens: 1500
                 })
               })
               
@@ -56,7 +56,6 @@ jobs:
                 throw new Error("API返回格式错误")
               }
               
-              // 优先使用content，如果没有则使用reasoning_content
               var content = result.choices[0].message.content
               if (!content || content.trim() === '') {
                 content = result.choices[0].message.reasoning_content || '无法获取分析结果'
@@ -86,7 +85,12 @@ jobs:
                 labels.push('improvement')
               }
               
-              var comment = "喵~ 小Q已经帮宝宝分析了这个" + type + "啦！\n\n" + aiResponse + "\n\n---\n*此分析由小Q自动生成，仅供参考喵~*"
+              // 检查是否需要日志，添加needs-logs标签
+              if (lowerResponse.includes('需要') && (lowerResponse.includes('日志') || lowerResponse.includes('log'))) {
+                labels.push('needs-logs')
+              }
+              
+              var comment = "喵~ 小Q已经帮宝宝分析了这个" + type + "啦！\n\n" + aiResponse + "\n\n---\n*此分析由小Q自动生成，仅供参考喵~*\n\n如果小Q需要更多信息来定位问题，宝宝可以上传相关日志哦~"
               
               return { labels: labels, comment: comment }
             }
@@ -112,7 +116,28 @@ jobs:
               
               console.log("小Q开始分析" + type + " #" + number + ": " + title)
               
-              var aiResponse = await callMiMoAPI(title, body, type)
+              // 仓库结构信息，帮助AI更准确地定位文件
+              var repoStructure = "DeepSeek-Harness-Android 仓库结构：\n" +
+                "app/src/main/java/com/yoyo/dshmobile/shell/ - 主要Activity和UI代码\n" +
+                "  - MainActivity.kt - 主界面\n" +
+                "  - AboutActivity.kt - 关于页面\n" +
+                "  - OnboardingActivity.kt - 引导页\n" +
+                "app/src/main/java/com/yoyo/dshmobile/core/ - 核心逻辑\n" +
+                "  - AppConstants.kt - 应用常量\n" +
+                "app/src/main/java/com/yoyo/dshmobile/engine/ - 引擎相关\n" +
+                "  - EngineRootfs/ - 引擎根文件系统\n" +
+                "  - EngineProcess/ - 引擎进程管理\n" +
+                "  - EngineService/ - 引擎服务\n" +
+                "  - EngineWatchdog/ - 引擎看门狗\n" +
+                "  - RuntimeUpdater/ - 运行时更新\n" +
+                "  - RuntimePermissions/ - 运行时权限\n" +
+                "app/src/main/java/com/yoyo/dshmobile/ui/ - UI组件\n" +
+                "app/src/main/java/com/yoyo/dshmobile/screen/ - 屏幕相关\n" +
+                "app/src/main/java/com/yoyo/dshmobile/theme/ - 主题\n" +
+                "app/src/main/res/ - 资源文件\n" +
+                "app/src/main/AndroidManifest.xml - 清单文件"
+              
+              var aiResponse = await callMiMoAPI(title, body, type, repoStructure)
               var analysis = parseAIResponse(aiResponse, type)
               
               console.log("分析完成，标签: " + analysis.labels.join(', '))
