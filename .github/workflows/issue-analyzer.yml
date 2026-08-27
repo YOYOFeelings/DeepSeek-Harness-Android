@@ -30,7 +30,6 @@ jobs:
               const userPrompt = "宝宝提交了一个新的" + type + "，小Q来帮忙看看~\n\n**" + type + "标题**：" + title + "\n\n**" + type + "内容**：\n" + body + "\n\n请分析这个" + type + "并按照格式回复。"
               
               console.log("小Q正在调用MiMo API...")
-              console.log("用户提示词长度: " + userPrompt.length)
               
               const response = await fetch('https://api.xiaomimimo.com/v1/chat/completions', {
                 method: 'POST',
@@ -39,7 +38,7 @@ jobs:
                   'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
-                  model: 'mimo',
+                  model: 'mimo-v2.5',
                   messages: [
                     { role: 'system', content: systemPrompt },
                     { role: 'user', content: userPrompt }
@@ -49,25 +48,27 @@ jobs:
                 })
               })
               
-              console.log("API响应状态: " + response.status)
-              
               const result = await response.json()
-              console.log("API响应结果: " + JSON.stringify(result).substring(0, 500))
+              console.log("API响应: " + JSON.stringify(result).substring(0, 200))
               
               if (!result.choices || !result.choices[0] || !result.choices[0].message) {
                 console.error("API响应格式错误: " + JSON.stringify(result))
-                throw new Error("API返回格式错误，请检查API配置")
+                throw new Error("API返回格式错误")
               }
               
-              return result.choices[0].message.content
+              // 优先使用content，如果没有则使用reasoning_content
+              var content = result.choices[0].message.content
+              if (!content || content.trim() === '') {
+                content = result.choices[0].message.reasoning_content || '无法获取分析结果'
+              }
+              
+              return content
             }
             
             function parseAIResponse(aiResponse, type) {
-              // 提取标签
-              const labels = ['ai-analyzed'] // 默认添加已分析标签
+              var labels = ['ai-analyzed']
               
-              // 根据AI回复判断标签
-              const lowerResponse = aiResponse.toLowerCase()
+              var lowerResponse = aiResponse.toLowerCase()
               
               if (lowerResponse.includes('bug报告') || lowerResponse.includes('bug')) {
                 labels.push('bug')
@@ -85,7 +86,6 @@ jobs:
                 labels.push('improvement')
               }
               
-              // 生成评论
               var comment = "喵~ 小Q已经帮宝宝分析了这个" + type + "啦！\n\n" + aiResponse + "\n\n---\n*此分析由小Q自动生成，仅供参考喵~*"
               
               return { labels: labels, comment: comment }
@@ -93,7 +93,6 @@ jobs:
             
             // 主流程
             try {
-              // 判断是Issue还是PR
               var isPR = !!context.payload.pull_request
               var type = isPR ? 'Pull Request' : 'Issue'
               
@@ -113,15 +112,11 @@ jobs:
               
               console.log("小Q开始分析" + type + " #" + number + ": " + title)
               
-              // 调用 MiMo API 分析
               var aiResponse = await callMiMoAPI(title, body, type)
-              
-              // 解析AI回复
               var analysis = parseAIResponse(aiResponse, type)
               
               console.log("分析完成，标签: " + analysis.labels.join(', '))
               
-              // 添加标签
               if (analysis.labels && analysis.labels.length > 0) {
                 await github.rest.issues.addLabels({
                   owner: context.repo.owner,
@@ -132,26 +127,21 @@ jobs:
                 console.log("已添加标签: " + analysis.labels.join(', '))
               }
               
-              // 发表评论
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: number,
                 body: analysis.comment
               })
-              console.log('已发表分析评论')
-              
               console.log('小Q分析完成啦~')
               
             } catch (error) {
               console.error('小Q分析出错了:', error.message)
-              console.error('错误堆栈:', error.stack)
               
               var isPR = !!context.payload.pull_request
               var type = isPR ? 'Pull Request' : 'Issue'
               var number = isPR ? context.payload.pull_request.number : context.payload.issue.number
               
-              // 发表错误评论
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
