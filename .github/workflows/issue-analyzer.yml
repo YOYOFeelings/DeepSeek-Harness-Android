@@ -47,12 +47,14 @@ jobs:
 
             ## 可能的问题位置
             （如果是Bug，推测可能的文件或模块；不是Bug写"无"）
-            ## 给出建议
-            （建议�bug、enhancement、question、documentation ⸥龤》给宝宝的斗约）
-            ## 给出斖皂斖你。
-            （用可用建议）`; 
 
-            const userPrompt = `宝宝提交了一个新的Issue，小Q来帮忙看看~
+            ## 建议标签
+            （从：bug、enhancement、question、documentation 中选）
+
+            ## 给宝宝的建议
+            （用小Q的语气给实用建议）`
+
+              const userPrompt = `宝宝提交了一个新的Issue，小Q来帮忙看看~
 
             **Issue标题**：${title}
 
