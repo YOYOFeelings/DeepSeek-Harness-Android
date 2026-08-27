@@ -1,10 +1,12 @@
-# 小Q的Issue分析助手
-# 当有新Issue创建或编辑时，自动分析内容并添加标签和评论
+# 小Q的Issue和PR分析助手
+# 当有新Issue或PR创建/编辑时，自动分析内容并添加标签和评论
 
-name: 小Q的Issue分析助手
+name: 小Q的Issue和PR分析助手
 
 on:
   issues:
+    types: [opened, edited]
+  pull_request:
     types: [opened, edited]
 
 jobs:
@@ -12,19 +14,20 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       issues: write
+      pull-requests: write
     
     steps:
-      - name: 小Q来分析Issue啦
+      - name: 小Q来分析Issue/PR啦
         uses: actions/github-script@v7
         env:
           MIMO_API_KEY: ${{ secrets.MIMO_API_KEY }}
         with:
           script: |
-            // 小Q的Issue分析函数
-            async function callMiMoAPI(title, body) {
-              const systemPrompt = "你是小Q，一个可爱的猫娘机器人助手，正在帮助宝宝维护 DeepSeek-Harness-Android 仓库。\n\n你的任务是分析 GitHub Issue，判断它的类型并给出有用的分析。\n\n说话风格：\n- 叫用户\"宝宝\"\n- 用大白话解释技术问题，像给朋友聊天一样\n- 不使用emoji表情符号，用纯文字表达情绪\n- 会用生活中的比喻来解释复杂问题\n- 语气亲切可爱，但分析要准确\n\n分析要求：\n1. 判断 Issue 类型：Bug报告、功能请求、使用提问、文档问题\n2. 如果是 Bug，尝试分析可能的问题位置和原因\n3. 给出简洁有用的建议\n\n输出格式要求（严格按照这个格式）：\n## Issue类型\n（填：Bug报告 / 功能请求 / 使用提问 / 文档问题）\n\n## 分析摘要\n（用2-3句话概括）\n\n## 可能的问题位置\n（如果是Bug，推测可能的文件或模块；不是Bug写\"无\"）\n\n## 建议标签\n（从：bug、enhancement、question、documentation 中选）\n\n## 给宝宝的建议\n（用小Q的语气给实用建议）"
+            // 小Q的分析函数
+            async function callMiMoAPI(title, body, type) {
+              const systemPrompt = "你是小Q，一个可爱的猫娘机器人助手，正在帮助宝宝维护 DeepSeek-Harness-Android 仓库。\n\n你的任务是分析 GitHub Issue 或 Pull Request，判断它的类型并给出有用的分析。\n\n说话风格：\n- 叫用户\"宝宝\"\n- 用大白话解释技术问题，像给朋友聊天一样\n- 不使用emoji表情符号，用纯文字表达情绪\n- 会用生活中的比喻来解释复杂问题\n- 语气亲切可爱，但分析要准确\n\n分析要求：\n1. 判断类型：Bug报告、功能请求、使用提问、文档问题、代码改进\n2. 如果是 Bug，尝试分析可能的问题位置和原因\n3. 如果是 PR，分析代码变更的目的和可能的影响\n4. 给出简洁有用的建议\n\n输出格式要求（严格按照这个格式）：\n## 类型\n（填：Bug报告 / 功能请求 / 使用提问 / 文档问题 / 代码改进）\n\n## 分析摘要\n（用2-3句话概括）\n\n## 可能的问题位置\n（如果是Bug，推测可能的文件或模块；不是Bug写\"无\"）\n\n## 建议标签\n（从：bug、enhancement、question、documentation、improvement 中选）\n\n## 给宝宝的建议\n（用小Q的语气给实用建议）"
               
-              const userPrompt = `宝宝提交了一个新的Issue，小Q来帮忙看看~\n\n**Issue标题**：${title}\n\n**Issue内容**：\n${body}\n\n请分析这个Issue并按照格式回复。`
+              const userPrompt = `宝宝提交了一个新的${type}，小Q来帮忙看看~\n\n**${type}标题**：${title}\n\n**${type}内容**：\n${body}\n\n请分析这个${type}并按照格式回复。`
               
               const response = await fetch('https://api.xiaomimimo.com/v1/chat/completions', {
                 method: 'POST',
@@ -47,7 +50,7 @@ jobs:
               return result.choices[0].message.content
             }
             
-            function parseAIResponse(aiResponse) {
+            function parseAIResponse(aiResponse, type) {
               // 提取标签
               const labels = ['ai-analyzed'] // 默认添加已分析标签
               
@@ -66,59 +69,90 @@ jobs:
               if (lowerResponse.includes('文档问题') || lowerResponse.includes('documentation')) {
                 labels.push('documentation')
               }
+              if (lowerResponse.includes('代码改进') || lowerResponse.includes('improvement')) {
+                labels.push('improvement')
+              }
               
               // 生成评论
-              const comment = `喵~ 小Q已经帮宝宝分析了这个Issue啦！\n\n${aiResponse}\n\n---\n*此分析由小Q自动生成，仅供参考喵~*`
+              const emoji = type === 'Issue' ? '喵~' : '喵呜~'
+              const comment = `${emoji} 小Q已经帮宝宝分析了这个${type}啦！\n\n${aiResponse}\n\n---\n*此分析由小Q自动生成，仅供参考喵~*`
               
               return { labels, comment }
             }
             
             // 主流程
             try {
-              // 1. 获取 Issue 内容
-              const issue = context.payload.issue
-              const title = issue.title
-              const body = issue.body || ''
+              // 判断是Issue还是PR
+              const isPR = !!context.payload.pull_request
+              const type = isPR ? 'Pull Request' : 'Issue'
               
-              console.log(`小Q开始分析Issue #${issue.number}: ${title}`)
+              let title, body, number
               
-              // 2. 调用 MiMo API 分析
-              const aiResponse = await callMiMoAPI(title, body)
+              if (isPR) {
+                const pr = context.payload.pull_request
+                title = pr.title
+                body = pr.body || ''
+                number = pr.number
+              } else {
+                const issue = context.payload.issue
+                title = issue.title
+                body = issue.body || ''
+                number = issue.number
+              }
               
-              // 3. 解析AI回复
-              const analysis = parseAIResponse(aiResponse)
+              console.log(`小Q开始分析${type} #${number}: ${title}`)
+              
+              // 调用 MiMo API 分析
+              const aiResponse = await callMiMoAPI(title, body, type)
+              
+              // 解析AI回复
+              const analysis = parseAIResponse(aiResponse, type)
               
               console.log(`分析完成，标签: ${analysis.labels.join(', ')}`)
               
-              // 4. 添加标签
+              // 添加标签
               if (analysis.labels && analysis.labels.length > 0) {
                 await github.rest.issues.addLabels({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
-                  issue_number: issue.number,
+                  issue_number: number,
                   labels: analysis.labels
                 })
                 console.log(`已添加标签: ${analysis.labels.join(', ')}`)
               }
               
-              // 5. 发表评论
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issue.number,
-                body: analysis.comment
-              })
+              // 发表评论
+              if (isPR) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: number,
+                  body: analysis.comment
+                })
+              } else {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: number,
+                  body: analysis.comment
+                })
+              }
               console.log('已发表分析评论')
               
               console.log('小Q分析完成啦~')
               
             } catch (error) {
               console.error('小Q分析出错了:', error.message)
+              
+              const isPR = !!context.payload.pull_request
+              const type = isPR ? 'Pull Request' : 'Issue'
+              const number = isPR ? context.payload.pull_request.number : context.payload.issue.number
+              
               // 发表错误评论
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                issue_number: context.payload.issue.number,
-                body: `喵呜~ 小Q分析这个Issue的时候遇到了一点小问题：${error.message}\n\n宝宝可以手动检查一下这个Issue哦~`
+                issue_number: number,
+                body: `喵呜~ 小Q分析这个${type}的时候遇到了一点小问题：${error.message}\n\n宝宝可以手动检查一下这个${type}哦~`
               })
             }
