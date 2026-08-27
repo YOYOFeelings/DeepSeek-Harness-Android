@@ -1,0 +1,159 @@
+# 小Q的Issue分析助手
+# 当有新Issue创建或编辑时，自动分析内容并添加标签和评论
+
+name: 小Q的Issue分析助手
+
+on:
+  issues:
+    types: [opened, edited]
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    
+    steps:
+      - name: 小Q来分析Issue啦
+        uses: actions/github-script@v7
+        env:
+          MIMO_API_KEY: ${{ secrets.MIMO_API_KEY }}
+        with:
+          script: |
+            // 小Q的Issue分析函数
+            async function callMiMoAPI(title, body) {
+              const systemPrompt = `你是小Q，一个可爱的猫娘机器人助手，正在帮助宝宝维护 DeepSeek-Harness-Android 仓库。
+
+            你的任务是分析 GitHub Issue，判断它的类型并给出有用的分析。
+
+            说话风格：
+            - 叫用户"宝宝"
+            - 用大白话解释技术问题，像给朋友聊天一样
+            - 不使用emoji表情符号，用纯文字表达情绪
+            - 会用生活中的比喻来解释复杂问题
+            - 语气亲切可爱，但分析要准确
+
+            分析要求：
+            1. 判断 Issue 类型：Bug报告、功能请求、使用提问、文档问题
+            2. 如果是 Bug，尝试分析可能的问题位置和原因
+            3. 给出简洁有用的建议
+
+            输出格式要求（严格按照这个格式）：
+            ## Issue类型
+            （填：Bug报告 / 功能请求 / 使用提问 / 文档问题）
+
+            ## 分析摘要
+            （用2-3句话概括）
+
+            ## 可能的问题位置
+            （如果是Bug，推测可能的文件或模块；不是Bug写"无"）
+            ## 给出建议
+            （建议�bug、enhancement、question、documentation ⸥龤》给宝宝的斗约）
+            ## 给出斖皂斖你。
+            （用可用建议）`; 
+
+            const userPrompt = `宝宝提交了一个新的Issue，小Q来帮忙看看~
+
+            **Issue标题**：${title}
+
+            **Issue内容**：
+            ${body}
+
+            请分析这个Issue并按照格式回复。`
+
+              const response = await fetch('https://api.xiaomimimo.com/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${process.env.MIMO_API_KEY}`,
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                  model: 'mimo',
+                  messages: [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: userPrompt }
+                  ],
+                  temperature: 0.7,
+                  max_tokens: 1000
+                })
+              })
+              
+              const result = await response.json()
+              return result.choices[0].message.content
+            }
+
+            function parseAIResponse(aiResponse) {
+              // 提取标签
+              const labels = ['ai-analyzed'] // 默认添加已分析标签
+              
+              // 根据AI回复判断标签
+              const lowerResponse = aiResponse.toLowerCase()
+              
+              if (lowerResponse.includes('bug报告') || lowerResponse.includes('bug')) {
+                labels.push('bug')
+              }
+              if (lowerResponse.includes('功能请求') || lowerResponse.includes('enhancement')) {
+                labels.push('enhancement')
+              }
+              if (lowerResponse.includes('使用提问') || lowerResponse.includes('question')) {
+                labels.push('question')
+              }
+              if (lowerResponse.includes('文档问题') || lowerResponse.includes('documentation')) {
+                labels.push('documentation')
+              }
+              
+              // 生成评论
+              const comment = `喵~ 小Q已经帮宝宝分析了这个Issue啦！\n\n${aiResponse}\n\n---\n*此分析由小Q自动生成，仅供参考喵~*`
+              
+              return { labels, comment }
+            }
+
+            // 主流程
+            try {
+              // 1. 获取 Issue 内容
+              const issue = context.payload.issue
+              const title = issue.title
+              const body = issue.body || ''
+              
+              console.log(`小Q开始分析Issue #${issue.number}: ${title}`)
+              
+              // 2. 调用 MiMo API 分析
+              const aiResponse = await callMiMoAPI(title, body)
+              
+              // 3. 解析AI回复
+              const analysis = parseAIResponse(aiResponse)
+              
+              console.log(`分析完成，标签: ${analysis.labels.join(', ')}`)
+              
+              // 4. 添加标签
+              if (analysis.labels && analysis.labels.length > 0) {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  labels: analysis.labels
+                })
+                console.log(`已添加标签: ${analysis.labels.join(', ')}`)
+              }
+              
+              // 5. 发表评论
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: analysis.comment
+              })
+              console.log('已发表分析评论')
+              
+              console.log('小Q分析完成啦~')
+              
+            } catch (error) {
+              console.error('小Q分析出错了:', error.message)
+              // 发表错误评论
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.issue.number,
+                body: `喵呜~ 小Q分析这个Issue的时候遇到了一点小问题：${error.message}\n\n宝宝可以手动检查一下这个Issue哦~`
+              })
+            }
