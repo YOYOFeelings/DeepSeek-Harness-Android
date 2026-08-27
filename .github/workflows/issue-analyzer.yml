@@ -27,12 +27,15 @@ jobs:
             async function callMiMoAPI(title, body, type) {
               const systemPrompt = "你是小Q，一个可爱的猫娘机器人助手，正在帮助宝宝维护 DeepSeek-Harness-Android 仓库。\n\n你的任务是分析 GitHub Issue 或 Pull Request，判断它的类型并给出有用的分析。\n\n说话风格：\n- 叫用户\"宝宝\"\n- 用大白话解释技术问题，像给朋友聊天一样\n- 不使用emoji表情符号，用纯文字表达情绪\n- 会用生活中的比喻来解释复杂问题\n- 语气亲切可爱，但分析要准确\n\n分析要求：\n1. 判断类型：Bug报告、功能请求、使用提问、文档问题、代码改进\n2. 如果是 Bug，尝试分析可能的问题位置和原因\n3. 如果是 PR，分析代码变更的目的和可能的影响\n4. 给出简洁有用的建议\n\n输出格式要求（严格按照这个格式）：\n## 类型\n（填：Bug报告 / 功能请求 / 使用提问 / 文档问题 / 代码改进）\n\n## 分析摘要\n（用2-3句话概括）\n\n## 可能的问题位置\n（如果是Bug，推测可能的文件或模块；不是Bug写\"无\"）\n\n## 建议标签\n（从：bug、enhancement、question、documentation、improvement 中选）\n\n## 给宝宝的建议\n（用小Q的语气给实用建议）"
               
-              const userPrompt = `宝宝提交了一个新的${type}，小Q来帮忙看看~\n\n**${type}标题**：${title}\n\n**${type}内容**：\n${body}\n\n请分析这个${type}并按照格式回复。`
+              const userPrompt = "宝宝提交了一个新的" + type + "，小Q来帮忙看看~\n\n**" + type + "标题**：" + title + "\n\n**" + type + "内容**：\n" + body + "\n\n请分析这个" + type + "并按照格式回复。"
+              
+              console.log("小Q正在调用MiMo API...")
+              console.log("用户提示词长度: " + userPrompt.length)
               
               const response = await fetch('https://api.xiaomimimo.com/v1/chat/completions', {
                 method: 'POST',
                 headers: {
-                  'Authorization': `Bearer ${process.env.MIMO_API_KEY}`,
+                  'Authorization': 'Bearer ' + process.env.MIMO_API_KEY,
                   'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
@@ -46,7 +49,16 @@ jobs:
                 })
               })
               
+              console.log("API响应状态: " + response.status)
+              
               const result = await response.json()
+              console.log("API响应结果: " + JSON.stringify(result).substring(0, 500))
+              
+              if (!result.choices || !result.choices[0] || !result.choices[0].message) {
+                console.error("API响应格式错误: " + JSON.stringify(result))
+                throw new Error("API返回格式错误，请检查API配置")
+              }
+              
               return result.choices[0].message.content
             }
             
@@ -74,41 +86,40 @@ jobs:
               }
               
               // 生成评论
-              const emoji = type === 'Issue' ? '喵~' : '喵呜~'
-              const comment = `${emoji} 小Q已经帮宝宝分析了这个${type}啦！\n\n${aiResponse}\n\n---\n*此分析由小Q自动生成，仅供参考喵~*`
+              var comment = "喵~ 小Q已经帮宝宝分析了这个" + type + "啦！\n\n" + aiResponse + "\n\n---\n*此分析由小Q自动生成，仅供参考喵~*"
               
-              return { labels, comment }
+              return { labels: labels, comment: comment }
             }
             
             // 主流程
             try {
               // 判断是Issue还是PR
-              const isPR = !!context.payload.pull_request
-              const type = isPR ? 'Pull Request' : 'Issue'
+              var isPR = !!context.payload.pull_request
+              var type = isPR ? 'Pull Request' : 'Issue'
               
-              let title, body, number
+              var title, body, number
               
               if (isPR) {
-                const pr = context.payload.pull_request
+                var pr = context.payload.pull_request
                 title = pr.title
                 body = pr.body || ''
                 number = pr.number
               } else {
-                const issue = context.payload.issue
+                var issue = context.payload.issue
                 title = issue.title
                 body = issue.body || ''
                 number = issue.number
               }
               
-              console.log(`小Q开始分析${type} #${number}: ${title}`)
+              console.log("小Q开始分析" + type + " #" + number + ": " + title)
               
               // 调用 MiMo API 分析
-              const aiResponse = await callMiMoAPI(title, body, type)
+              var aiResponse = await callMiMoAPI(title, body, type)
               
               // 解析AI回复
-              const analysis = parseAIResponse(aiResponse, type)
+              var analysis = parseAIResponse(aiResponse, type)
               
-              console.log(`分析完成，标签: ${analysis.labels.join(', ')}`)
+              console.log("分析完成，标签: " + analysis.labels.join(', '))
               
               // 添加标签
               if (analysis.labels && analysis.labels.length > 0) {
@@ -118,41 +129,33 @@ jobs:
                   issue_number: number,
                   labels: analysis.labels
                 })
-                console.log(`已添加标签: ${analysis.labels.join(', ')}`)
+                console.log("已添加标签: " + analysis.labels.join(', '))
               }
               
               // 发表评论
-              if (isPR) {
-                await github.rest.issues.createComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: number,
-                  body: analysis.comment
-                })
-              } else {
-                await github.rest.issues.createComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: number,
-                  body: analysis.comment
-                })
-              }
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: number,
+                body: analysis.comment
+              })
               console.log('已发表分析评论')
               
               console.log('小Q分析完成啦~')
               
             } catch (error) {
               console.error('小Q分析出错了:', error.message)
+              console.error('错误堆栈:', error.stack)
               
-              const isPR = !!context.payload.pull_request
-              const type = isPR ? 'Pull Request' : 'Issue'
-              const number = isPR ? context.payload.pull_request.number : context.payload.issue.number
+              var isPR = !!context.payload.pull_request
+              var type = isPR ? 'Pull Request' : 'Issue'
+              var number = isPR ? context.payload.pull_request.number : context.payload.issue.number
               
               // 发表错误评论
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: number,
-                body: `喵呜~ 小Q分析这个${type}的时候遇到了一点小问题：${error.message}\n\n宝宝可以手动检查一下这个${type}哦~`
+                body: "喵呜~ 小Q分析这个" + type + "的时候遇到了一点小问题：" + error.message + "\n\n宝宝可以手动检查一下这个" + type + "哦~"
               })
             }
