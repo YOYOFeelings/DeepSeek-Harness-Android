@@ -39,9 +39,16 @@ jobs:
         yes | sdkmanager --licenses || true
         sdkmanager --update
     
+    - name: 生成Gradle Wrapper（如果不存在）
+      run: |
+        if [ ! -f "gradlew" ]; then
+          echo "生成Gradle Wrapper..."
+          gradle wrapper --gradle-version 8.5
+        fi
+        chmod +x gradlew
+    
     - name: 构建APK
       run: |
-        chmod +x gradlew
         if [ "${{ github.event.inputs.build_type }}" == "release" ]; then
           ./gradlew assembleRelease
         else
