@@ -43,7 +43,7 @@ jobs:
       run: |
         if [ ! -f "gradlew" ]; then
           echo "生成Gradle Wrapper..."
-          gradle wrapper --gradle-version 8.5
+          gradle wrapper --gradle-version 8.10.2
         fi
         chmod +x gradlew
     
