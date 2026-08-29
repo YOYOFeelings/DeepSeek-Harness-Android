@@ -71,28 +71,6 @@ android {
   }
 }
 
-// 构建完成后将 APK 复制到项目根目录，并按品牌名 + 版本号重命名。
-tasks.matching { it.name == "assembleDebug" }.configureEach {
-  doLast {
-    val apkDir = layout.buildDirectory.dir("outputs/apk/debug").get().asFile
-    apkDir.listFiles { f -> f.name.endsWith(".apk") }?.forEach { f ->
-      val dest = file("${rootDir}/deepseek-harness-${android.defaultConfig.versionName}-debug.apk")
-      f.copyTo(dest, overwrite = true)
-      println("APK 已复制到: ${dest.absolutePath}")
-    }
-  }
-}
-tasks.matching { it.name == "assembleRelease" }.configureEach {
-  doLast {
-    val apkDir = layout.buildDirectory.dir("outputs/apk/release").get().asFile
-    apkDir.listFiles { f -> f.name.endsWith(".apk") }?.forEach { f ->
-      val dest = file("${rootDir}/deepseek-harness-${android.defaultConfig.versionName}-release.apk")
-      f.copyTo(dest, overwrite = true)
-      println("APK 已复制到: ${dest.absolutePath}")
-    }
-  }
-}
-
 dependencies {
   implementation(project(":core"))
   implementation(project(":engine"))
