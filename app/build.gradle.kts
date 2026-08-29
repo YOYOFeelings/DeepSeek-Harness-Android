@@ -17,7 +17,7 @@ val hasKeystore = keystorePropsFile.exists()
 
 android {
   namespace = "com.yoyo.dshmobile.shell"
-  compileSdk = 36
+  compileSdk = 34
 
   defaultConfig {
     applicationId = "com.yoyo.dshmobile.shell"
