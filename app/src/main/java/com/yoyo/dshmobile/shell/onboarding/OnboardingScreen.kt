@@ -850,13 +850,3 @@ private fun Page4(
  * 但 App 的 POST_NOTIFICATIONS 运行时权限标记仍返回未授权，导致引导页 P3 无法通过。
  * 策略：Android 13+ 优先看运行时权限标记；未授权时回退查询系统通知管理器状态。
  */
-private fun isNotificationEnabled(context: Context): Boolean {
-  if (Build.VERSION.SDK_INT < 33) return true
-  val grantedByPermission =
-    context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
-  if (grantedByPermission) return true
-  return runCatching {
-    val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-    nm?.areNotificationsEnabled() ?: false
-  }.getOrDefault(false)
-}
